@@ -743,7 +743,7 @@ function App() {
 
     return (
         <ErrorBoundary>
-        <div className="min-h-screen w-screen bg-black text-cyan-100 font-mono overflow-hidden flex flex-col relative selection:bg-cyan-900 selection:text-white">
+        <div className="h-screen w-screen bg-black text-cyan-100 font-mono overflow-hidden flex flex-col relative selection:bg-cyan-900 selection:text-white">
 
             {/* Main UI */}
 
@@ -916,7 +916,7 @@ function App() {
                 />
 
                 {/* Footer Controls / Tools Module */}
-                <div className="mt-auto z-50">
+                <div className="mt-auto z-50 flex justify-center">
                     <ToolsModule
                         isConnected={isConnected}
                         isMuted={isMuted}
@@ -926,9 +926,6 @@ function App() {
                         onToggleSettings={() => setShowSettings(!showSettings)}
                         onToggleEmail={toggleEmailWindow}
                         showEmailWindow={showEmailWindow}
-                        activeDragElement={activeDragElement}
-                        position={elementPositions.tools}
-                        onMouseDown={(e) => handleMouseDown(e, 'tools')}
                     />
                 </div>
 

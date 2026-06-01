@@ -10,22 +10,12 @@ const ToolsModule = ({
     onToggleSettings,
     onToggleEmail,
     showEmailWindow,
-    activeDragElement,
-    position,
-    onMouseDown
 }) => {
     return (
         <div
             id="tools"
-            onMouseDown={onMouseDown}
-            className={`absolute px-8 py-4 transition-all duration-200 
-                        backdrop-blur-2xl bg-white/10 border border-white/20 shadow-[0_8px_32px_0_rgba(31,38,135,0.37)] rounded-full`}
-            style={{
-                left: position.x,
-                top: position.y,
-                transform: 'translate(-50%, -50%)',
-                pointerEvents: 'auto'
-            }}
+            className="px-8 py-4 transition-all duration-200 
+                        backdrop-blur-2xl bg-white/10 border border-white/20 shadow-[0_8px_32px_0_rgba(31,38,135,0.37)] rounded-full"
         >
             <div className="absolute inset-0 bg-[url('https://grainy-gradients.vercel.app/noise.svg')] opacity-5 pointer-events-none mix-blend-overlay rounded-full"></div>
 
