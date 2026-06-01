@@ -743,7 +743,7 @@ function App() {
 
     return (
         <ErrorBoundary>
-        <div className="h-screen w-screen bg-black text-cyan-100 font-mono overflow-hidden flex flex-col relative selection:bg-cyan-900 selection:text-white">
+        <div className="min-h-screen w-screen bg-black text-cyan-100 font-mono overflow-hidden flex flex-col relative selection:bg-cyan-900 selection:text-white">
 
             {/* Main UI */}
 
@@ -932,7 +932,6 @@ function App() {
                     />
                 </div>
 
-                {/* Memory Prompt removed - memory is now actively saved to project */}
             </div>
         </div>
         </ErrorBoundary>
