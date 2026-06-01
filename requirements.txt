@@ -2,25 +2,15 @@ fastapi
 uvicorn
 python-socketio
 python-multipart
-# Google GenAI SDK (v1beta)
+# Google GenAI SDK
 google-genai
-# Computer Vision & Audio
-opencv-python
+# Audio
 pyaudio
 pillow
-mss
-# Browser Automation
-playwright
-playwright-stealth
-# Smart Home
-python-kasa
-# 3D Printing
-zeroconf>=0.131.0
-aiohttp>=3.9.0
+# Email
+google-auth
+google-api-python-client
+google-auth-oauthlib
 # Utilities
 python-dotenv
 psutil
-# Face & Hand tracking
-mediapipe
-# CAD Generation
-build123d

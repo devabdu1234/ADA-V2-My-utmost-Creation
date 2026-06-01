@@ -1,6 +1,7 @@
 import React, { useEffect, useRef } from 'react';
+import { AlertTriangle } from 'lucide-react';
 
-const TopAudioBar = ({ audioData }) => {
+const TopAudioBar = ({ audioData, escalationCount = 0 }) => {
     const canvasRef = useRef(null);
 
     useEffect(() => {
@@ -16,11 +17,6 @@ const TopAudioBar = ({ audioData }) => {
             const barWidth = 4;
             const gap = 2;
             const totalBars = Math.floor(width / (barWidth + gap));
-
-            // Simple visualization logic
-            // Assuming audioData is an array of 0-255 values
-            // We mirror it from center
-
             const center = width / 2;
 
             for (let i = 0; i < totalBars / 2; i++) {
@@ -28,17 +24,13 @@ const TopAudioBar = ({ audioData }) => {
                 const percent = value / 255;
                 const barHeight = Math.max(2, percent * height);
 
-                // Create gradient for bars
                 const gradient = ctx.createLinearGradient(center, 0, center, height);
                 gradient.addColorStop(0, 'rgba(34, 211, 238, 0.2)');
                 gradient.addColorStop(0.5, 'rgba(167, 139, 250, 0.9)');
                 gradient.addColorStop(1, 'rgba(34, 211, 238, 0.2)');
                 ctx.fillStyle = gradient;
 
-                // Right side
                 ctx.fillRect(center + i * (barWidth + gap), (height - barHeight) / 2, barWidth, barHeight);
-
-                // Left side
                 ctx.fillRect(center - (i + 1) * (barWidth + gap), (height - barHeight) / 2, barWidth, barHeight);
             }
         };
@@ -47,12 +39,15 @@ const TopAudioBar = ({ audioData }) => {
     }, [audioData]);
 
     return (
-        <canvas
-            ref={canvasRef}
-            width={300}
-            height={40}
-            className="opacity-80"
-        />
+        <div className="relative flex items-center">
+            <canvas ref={canvasRef} width={300} height={40} className="opacity-80" />
+            {escalationCount > 0 && (
+                <div className="absolute -top-2 -right-2 flex items-center gap-1 bg-rose-500/20 border border-rose-500/40 rounded-full px-2 py-0.5 animate-pulse">
+                    <AlertTriangle size={10} className="text-rose-300" />
+                    <span className="text-[10px] font-bold text-rose-200">{escalationCount}</span>
+                </div>
+            )}
+        </div>
     );
 };
 
