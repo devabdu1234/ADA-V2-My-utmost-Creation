@@ -15,12 +15,31 @@ if sys.version_info < (3, 11, 0):
     asyncio.ExceptionGroup = exceptiongroup.ExceptionGroup
 
 from tools import tools_list
+from weather_service import city_weather
+from proactive import ActivitySignals, ProactiveEngine, build_spoken_prompt
+from computer_bridge import call_computer_tool, READONLY_COMPUTER_TOOLS, SAFETY_COMPUTER_TOOLS, ALLOWED_COMPUTER_TOOLS
 
 FORMAT = pyaudio.paInt16
 CHANNELS = 1
 SEND_SAMPLE_RATE = 16000
 RECEIVE_SAMPLE_RATE = 24000
 CHUNK_SIZE = 1024
+
+# Voice-activity gate: chunks quieter than this RMS never reach Gemini.
+# Kills hallucinated "ghost speech" from fan hum / silence AND saves tokens.
+SPEECH_RMS_THRESHOLD = 400
+SPEECH_HANGOVER_CHUNKS = 8  # ~0.5s grace after speech stops so words aren't clipped
+
+
+def _chunk_rms(data):
+    import array
+    try:
+        samples = array.array('h', data)
+        if not samples:
+            return 0
+        return (sum(s * s for s in samples) / len(samples)) ** 0.5
+    except Exception:
+        return 0
 
 MODEL = "models/gemini-2.5-flash-native-audio-preview-12-2025"
 DEFAULT_MODE = "none"
@@ -54,6 +73,10 @@ config = types.LiveConnectConfig(
         "You can have natural conversations, answer questions, and help with tasks. "
         "You also have email capabilities: you can read, analyze, and send emails when asked. "
         "When the user asks about emails, use your tools to fetch and manage their inbox. "
+        "You can also see and control the user's computer with computer_* tools: "
+        "list open windows, take screenshots, and (with user confirmation) click, type, and press keys. "
+        "When the user asks you to do something on their computer, use computer_list_windows or "
+        "computer_screenshot first to understand the screen, then act. Always narrate briefly what you are doing. "
         "For non-email topics, be conversational and helpful like a normal assistant. "
         "Be concise, warm, and natural. Address the user as 'Sir'."
     ),
@@ -108,6 +131,9 @@ class AudioLoop:
         self._is_model_speaking = False
         self._model_silence_start = None
         self.MODEL_SPEAKING_TIMEOUT = 1.5
+
+        self.signals = ActivitySignals()
+        self.proactive = ProactiveEngine()
 
     def flush_chat(self):
         if self.chat_buffer["sender"] and self.chat_buffer["text"].strip():
@@ -166,6 +192,7 @@ class AudioLoop:
                 elif now - self._model_silence_start > self.MODEL_SPEAKING_TIMEOUT:
                     self._is_model_speaking = False
                     self._model_silence_start = None
+            self.signals.model_speaking = self._is_model_speaking
             await asyncio.sleep(0.1)
 
     async def listen_audio(self):
@@ -212,6 +239,7 @@ class AudioLoop:
 
         print("[ADA] Input stream opened successfully.")
 
+        hangover = 0
         while not self.stop_event.is_set():
             if self.paused:
                 await asyncio.sleep(0.1)
@@ -220,6 +248,17 @@ class AudioLoop:
                 data = await asyncio.to_thread(in_stream.read, CHUNK_SIZE, exception_on_overflow=False)
                 if self._is_model_speaking:
                     continue
+                # VAD gate: stream only real speech, starve hallucinations + save tokens
+                if _chunk_rms(data) >= SPEECH_RMS_THRESHOLD:
+                    hangover = SPEECH_HANGOVER_CHUNKS
+                    self.signals.last_voice_activity = time.time()
+                elif hangover > 0:
+                    hangover -= 1
+                    if hangover == 0:
+                        self.signals.mic_open = False
+                else:
+                    continue
+                self.signals.mic_open = True
                 await self.out_queue.put({"data": data, "mime_type": "audio/pcm;rate=16000"})
             except Exception as e:
                 print(f"[ADA] Error reading audio stream: {e}")
@@ -279,9 +318,15 @@ class AudioLoop:
                         print("The tool was called")
                         function_responses = []
                         for fc in response.tool_call.function_calls:
-                            if fc.name in ["read_emails", "send_email"]:
+                            if fc.name in ["read_emails", "send_email", "get_weather"] or fc.name in ALLOWED_COMPUTER_TOOLS:
                                 prompt = fc.args.get("prompt", "")
                                 confirmation_required = self.permissions.get(fc.name, True)
+                                if fc.name == "get_weather":
+                                    confirmation_required = False  # weather is read-only, never gate it
+                                elif fc.name in SAFETY_COMPUTER_TOOLS:
+                                    confirmation_required = False  # emergency stop: kill-switch must never be gated
+                                elif fc.name in READONLY_COMPUTER_TOOLS:
+                                    confirmation_required = False  # looking at the screen is harmless
 
                                 if not confirmation_required:
                                     print(f"[ADA DEBUG] [TOOL] Permission check: '{fc.name}' -> AUTO-ALLOW")
@@ -404,8 +449,55 @@ class AudioLoop:
                                     )
                                     function_responses.append(function_response)
 
-                        if function_responses:
-                            await self.session.send_tool_response(function_responses=function_responses)
+                                elif fc.name == "get_weather":
+                                    city = fc.args.get("city", "")
+                                    print(f"[ADA DEBUG] [TOOL] Tool Call: 'get_weather' City='{city}'")
+                                    result = await asyncio.wait_for(
+                                        asyncio.to_thread(city_weather, city), timeout=40.0)
+                                    if "error" in result:
+                                        result_str = result["error"]
+                                        self._push_widget("error", {
+                                            "title": "Weather Lock Failed",
+                                            "message": result["error"],
+                                        })
+                                    else:
+                                        self._push_widget("weather", result)
+                                        result_str = (f"Sir, {result['city']} is {result['temp']} degrees "
+                                                      f"and {result['description']}. I've locked it on your globe.")
+                                    function_response = types.FunctionResponse(
+                                        id=fc.id, name=fc.name, response={"result": result_str}
+                                    )
+                                    function_responses.append(function_response)
+                                elif fc.name.startswith("computer_"):
+                                    print(f"[ADA DEBUG] [TOOL] Tool Call: '{fc.name}' args={fc.args}")
+                                    self._push_widget("computer_control", {"state": "active", "tool": fc.name})
+                                    result = await asyncio.wait_for(
+                                        call_computer_tool(fc.name, dict(fc.args or {})), timeout=60.0)
+                                    if result["is_error"] or not result["texts"]:
+                                        self._push_widget("computer_control", {
+                                            "state": "failed", "tool": fc.name,
+                                            "detail": " ".join(result["texts"])[:120]})
+                                        result_str = "Sir, that computer action failed. " + " ".join(result["texts"])
+                                        self._push_widget("error", {
+                                            "title": "Computer Control",
+                                            "message": " ".join(result["texts"])[:200],
+                                        })
+                                    else:
+                                        self._push_widget("computer_control", {
+                                            "state": "done", "tool": fc.name,
+                                            "detail": result["texts"][0][:120] if result["texts"] else ""})
+                                        result_str = "\n".join(result["texts"])
+                                        if result["images"]:
+                                            self._push_widget("computer_screenshot", {
+                                                "image": result["images"][0],
+                                                "tool": fc.name,
+                                            })
+                                    function_response = types.FunctionResponse(
+                                        id=fc.id, name=fc.name, response={"result": result_str}
+                                    )
+                                    function_responses.append(function_response)
+
+                                await self.session.send_tool_response(function_responses=function_responses)
 
                 self.flush_chat()
         except Exception as e:
@@ -518,15 +610,33 @@ class AudioLoop:
                         "category": e.get("category", ""),
                         "priority": e.get("priority", "Medium"),
                         "sentiment": e.get("sentiment", "Neutral"),
+                        "confidence": e.get("confidence", 0.5),
+                        "is_escalated": e.get("is_escalated", False),
                         "summary": e.get("summary", ""),
                     })
+
+                # Proactive Interruption Engine: score everything, maybe speak.
+                decision = None
+                try:
+                    decision = self.proactive.decide(emails_data, self.signals)
+                except Exception as e:
+                    print(f"[PROACTIVE] Engine error: {e}")
+
                 self._push_widget("email_summary", {
                     "count": result["count"],
-                    "emails": emails_data
+                    "emails": emails_data,
+                    "proactive": {
+                        "action": decision["action"] if decision else "none",
+                        "score": decision["score"] if decision else None,
+                    },
                 })
-                high_priority = [e for e in result["emails"] if e.get("priority") == "High"]
-                if high_priority:
-                    print(f"[ADA SUBCONSCIOUS] High priority email (widget only, no interrupt)")
+
+                if decision and decision["action"] == "speak" and self.session:
+                    prompt = build_spoken_prompt(decision["email"], decision["score"])
+                    print(f"[PROACTIVE] Interrupting user — score {decision['score']}")
+                    await self.session.send(input=prompt, end_of_turn=True)
+                elif decision:
+                    print(f"[PROACTIVE] {decision['action'].upper()} — score {decision['score']} gates={decision['gates']}")
         except Exception as e:
             print(f"[ADA SUBCONSCIOUS] Email check error: {e}")
 

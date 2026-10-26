@@ -1,0 +1,12 @@
+{
+    "tool_permissions": {
+        "read_emails": true,
+        "send_email": true
+    },
+    "email_config": {
+        "email_address": "fellibulla@gmail.com",
+        "password": "oxte uemn taud cqvq",
+        "imap_server": "imap.gmail.com",
+        "smtp_server": "smtp.gmail.com"
+    }
+}

@@ -24,6 +24,7 @@ sys.path.append(_BACKEND_DIR)
 import ada
 from email_agent import EmailAgent
 from sheets_logger import SheetsLogger
+from weather_service import city_weather
 
 sio = socketio.AsyncServer(async_mode='asgi', cors_allowed_origins='*')
 app = FastAPI()
@@ -97,6 +98,23 @@ async def startup_event():
 @app.get("/status")
 async def status():
     return {"status": "running", "service": "A.P.A Email Assistant Backend"}
+
+@app.get("/proactive/stats")
+async def proactive_stats():
+    """Research evidence endpoint: engine stats + last decisions (for the report)."""
+    log_path = ada.ProactiveEngine().evidence_file
+    entries = []
+    if os.path.exists(log_path):
+        try:
+            with open(log_path, 'r', encoding='utf-8') as f:
+                lines = f.readlines()
+            entries = [json.loads(l) for l in lines[-50:]]
+        except Exception as e:
+            return {"error": str(e)}
+    stats = None
+    if audio_loop and audio_loop.proactive:
+        stats = audio_loop.proactive.stats
+    return {"stats": stats, "recent": entries}
 
 @sio.event
 async def connect(sid, environ):
@@ -223,12 +241,29 @@ async def toggle_mute(sid, data=None):
         print(f"Mute toggled: {muted}")
         await sio.emit('status', {'msg': f"{'Muted' if muted else 'Unmuted'}"})
 
+# Frontend emits these names — previously unhandled, so mute was a placebo.
+@sio.event
+async def pause_audio(sid, data=None):
+    if audio_loop:
+        audio_loop.set_paused(True)
+        print("Audio paused (mic hot-cut).")
+        await sio.emit('status', {'msg': 'Muted'})
+
+@sio.event
+async def resume_audio(sid, data=None):
+    if audio_loop:
+        audio_loop.set_paused(False)
+        print("Audio resumed.")
+        await sio.emit('status', {'msg': 'Unmuted'})
+
 @sio.event
 async def user_input(sid, data):
     if audio_loop and audio_loop.session:
         text = data.get('text', '') if data else ''
         if text:
             print(f"[SERVER] User text input: {text}")
+            audio_loop.signals.text_active = True
+            audio_loop.signals.last_text_activity = __import__('time').time()
             await audio_loop.send_text(text)
 
 @sio.event
@@ -243,6 +278,8 @@ async def send_message(sid, data):
         message = data.get('message', '')
         if message:
             print(f"[CHAT] Message from frontend: {message[:80]}...")
+            audio_loop.signals.text_active = True
+            audio_loop.signals.last_text_activity = __import__('time').time()
             try:
                 await audio_loop.session.send(input=message, end_of_turn=True)
             except Exception as e:
@@ -277,6 +314,112 @@ async def fetch_today_emails(sid, data=None):
         await sio.emit('email_error', {'error': str(e)})
 
 @sio.event
+async def summon_demo(sid, data=None):
+    """On-demand cinematic summon: fetches + analyzes inbox, pushes globe overlay."""
+    print("[SERVER] Summon demo requested...")
+    email_config = SETTINGS.get("email_config", {})
+    agent = EmailAgent(
+        email_address=email_config.get("email_address", ""),
+        password=email_config.get("password", "")
+    )
+    try:
+        result = await agent.read_emails(limit=8)
+        if "error" in result:
+            await sio.emit('widget_update', {'type': 'error', 'data': {
+                'title': 'Summon Failed', 'message': result["error"],
+                'detail': 'Check email credentials in .env.'}})
+            return
+        emails_data = [{
+            "from": e.get("from", "Unknown"), "subject": e.get("subject", "No subject"),
+            "category": e.get("category", ""), "priority": e.get("priority", "Medium"),
+            "sentiment": e.get("sentiment", "Neutral"), "intensity": e.get("intensity", "Mild"),
+            "confidence": e.get("confidence", 0.5), "is_escalated": e.get("is_escalated", False),
+            "summary": e.get("summary", ""), "draft_reply": e.get("draft_reply", "")
+        } for e in result.get("emails", [])]
+        await sio.emit('widget_update', {'type': 'email_summary', 'data': {
+            "count": result.get("count", 0), "emails": emails_data,
+            "escalation_count": result.get("escalation_count", 0),
+            "low_confidence_count": result.get("low_confidence_count", 0)
+        }})
+        print(f"[SERVER] Summon pushed: {result.get('count', 0)} emails.")
+    except Exception as e:
+        print(f"[SERVER] summon_demo error: {e}")
+        await sio.emit('widget_update', {'type': 'error', 'data': {
+            'title': 'Summon Failed', 'message': str(e)}}, room=sid)
+
+@sio.event
+async def weather_city(sid, data=None):
+    """Ask a city -> geocode -> globe locks on -> live weather card. Fully coded."""
+    city = ((data or {}).get("city", "") if isinstance(data, dict) else "") or "Colombo"
+    print(f"[SERVER] Weather lock requested: {city}")
+    try:
+        import asyncio as _aio
+        result = await _aio.to_thread(city_weather, city)
+        if "error" in result:
+            await sio.emit('widget_update', {'type': 'error', 'data': {
+                'title': 'Weather Lock Failed', 'message': result["error"]}})
+            return
+        await sio.emit('widget_update', {'type': 'weather', 'data': result})
+        print(f"[SERVER] Weather lock pushed: {result['city']} ({result['lat']:.2f}, {result['lon']:.2f}).")
+    except Exception as e:
+        print(f"[SERVER] weather_city error: {e}")
+        await sio.emit('widget_update', {'type': 'error', 'data': {
+            'title': 'Weather Lock Failed', 'message': str(e)}})
+
+@sio.event
+async def control_demo(sid, data=None):
+    """Cinematic takeover demo: synthetic control events so the HUD overlay can be
+    shown without a live voice session (same pattern as weather_demo/summon_demo)."""
+    import asyncio as _aio
+    import base64
+    import io as _io
+    from PIL import Image
+
+    def _demo_feed(step):
+        img = Image.new('RGB', (320, 200), (8, 12, 24))
+        px = img.load()
+        for y in range(200):
+            for x in range(0, 320, 3):
+                v = (x * y // 900 + step * 40) % 80
+                px[x, y] = (v // 4 + 8, v // 2 + 20, v // 3 + 44)
+        for i in range(step, 320, 4):
+            for h in range(120 + (i * 7) % 60, 160):
+                px[i, h] = (34, 211, 238)
+        buf = _io.BytesIO()
+        img.save(buf, format='PNG')
+        return base64.b64encode(buf.getvalue()).decode()
+
+    events = [
+        ({'type': 'computer_control', 'data': {'state': 'active', 'tool': 'computer_list_windows'}}, 0.0),
+        ({'type': 'computer_control', 'data': {'state': 'done', 'tool': 'computer_list_windows'}}, 0.7),
+        ({'type': 'computer_control', 'data': {'state': 'active', 'tool': 'computer_screenshot'}}, 1.4),
+        ({'type': 'computer_screenshot', 'data': {'image': _demo_feed(1), 'tool': 'computer_screenshot'}}, 2.0),
+        ({'type': 'computer_control', 'data': {'state': 'active', 'tool': 'computer_type'}}, 2.7),
+        ({'type': 'computer_screenshot', 'data': {'image': _demo_feed(2), 'tool': 'computer_screenshot'}}, 3.4),
+        ({'type': 'computer_control', 'data': {'state': 'done', 'tool': 'computer_type', 'detail': 'typed into focused window'}}, 4.0),
+    ]
+    print("[SERVER] Control demo sequence starting...")
+    for payload, delay in events:
+        await _aio.sleep(delay)
+        await sio.emit('widget_update', payload)
+    await sio.emit('status', {'msg': 'Control demo sequence played'})
+
+@sio.event
+async def weather_demo(sid, data=None):
+    """On-demand weather globe summon (sample data until live API wired)."""
+    city = (data or {}).get("city", "Colombo") if isinstance(data, dict) else "Colombo"
+    await sio.emit('widget_update', {'type': 'weather', 'data': {
+        "city": city, "temp": 87, "feels": 93, "description": "partly sunny",
+        "humidity": 74, "wind": "12 km/h",
+        "forecast": [
+            {"date": "10-14", "desc": "sunny", "lo": 78, "hi": 88},
+            {"date": "10-15", "desc": "scattered showers", "lo": 77, "hi": 86},
+            {"date": "10-16", "desc": "thunderstorms", "lo": 77, "hi": 85},
+        ],
+    }})
+    print(f"[SERVER] Weather summon pushed: {city}.")
+
+@sio.event
 async def new_email(sid, data):
     """Sends a new email from the compose window."""
     if not data:
@@ -307,6 +450,22 @@ async def new_email(sid, data):
     except Exception as e:
         print(f"[SERVER] new_email error: {e}")
         await sio.emit('email_send_result', {'error': str(e)})
+
+@sio.event
+async def emergency_stop(sid, data=None):
+    """User kill-switch: disables all mouse/keyboard control instantly, no session required."""
+    from computer_bridge import call_computer_tool
+    try:
+        result = await call_computer_tool("computer_emergency_stop", timeout=25)
+        ok = not result.get("is_error")
+        await sio.emit('widget_update', {'type': 'computer_control', 'data': {
+            'state': 'stopped' if ok else 'failed',
+            'tool': 'computer_emergency_stop'}})
+        await sio.emit('status', {'msg': 'Emergency stop engaged - control disabled' if ok
+                                  else 'Emergency stop failed'})
+    except Exception as e:
+        print(f"[SERVER] Emergency stop error: {e}")
+        await sio.emit('error', {'msg': f'Emergency stop failed: {e}'})
 
 @sio.event
 async def update_settings(sid, data):

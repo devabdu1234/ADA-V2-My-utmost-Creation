@@ -1,46 +1,87 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { Mail, CloudSun, AlertTriangle, X, ChevronDown, ChevronUp, Send, Maximize2, MessageSquare } from 'lucide-react';
+import { Mail, CloudSun, AlertTriangle, X, ChevronDown, ChevronUp, Send, MessageSquare } from 'lucide-react';
+import GlobeStage from './GlobeStage';
+import CityMap from './CityMap';
 
-const widgetVariants = {
-    initial: { opacity: 0, y: 60, scale: 0.9, filter: "blur(4px)" },
-    animate: { opacity: 1, y: 0, scale: 1, filter: "blur(0px)", transition: { type: "spring", stiffness: 300, damping: 25 } },
-    exit: { opacity: 0, y: -20, scale: 0.95, filter: "blur(4px)", transition: { duration: 0.2 } }
+// Weather summon, two acts: ORBIT (globe hunts the city) then STREET (map dives in).
+// Email never enters this component tree - it has its own stage below.
+function WeatherSummon({ data, onClose }) {
+    const [act, setAct] = React.useState('orbit');
+    React.useEffect(() => {
+        const t = setTimeout(() => setAct('street'), 5600);
+        return () => clearTimeout(t);
+    }, []);
+    const lat = data?.lat ?? 6.93;
+    const lon = data?.lon ?? 79.86;
+    return (
+        <>
+            <div className="relative flex items-center justify-center" style={{ width: 640, height: 380 }}>
+                <AnimatePresence mode="wait">
+                    {act === 'orbit' ? (
+                        <motion.div key="orbit" exit={{ opacity: 0, scale: 1.1, filter: 'blur(10px)' }} transition={{ duration: 0.45 }}>
+                            <GlobeStage mode="weather" data={{ city: data?.city, markers: globeMarkersFor({ type: 'weather', data }) }} width={460} height={330} />
+                        </motion.div>
+                    ) : (
+                        <CityMap key="street" lat={lat} lon={lon} city={data?.city} temp={data?.temp} description={data?.description} width={640} height={380} />
+                    )}
+                </AnimatePresence>
+            </div>
+            <motion.div variants={cardVariants} initial="initial" animate="animate" exit="exit">
+                <WeatherWidget data={data} onClose={onClose} />
+            </motion.div>
+        </>
+    );
+}
+
+// Summon choreography: every major intent gets the same cinematic beats —
+// scrim dims -> globe spins up center -> detail card docks beside it -> ADA speaks.
+// Errors stay as corner toasts so they never hijack the scene.
+const stageVariants = {
+    initial: { opacity: 0, scale: 0.7, y: 80, filter: 'blur(12px)' },
+    animate: { opacity: 1, scale: 1, y: 0, filter: 'blur(0px)', transition: { type: 'spring', stiffness: 170, damping: 22 } },
+    exit: { opacity: 0, scale: 1.12, y: -30, filter: 'blur(10px)', transition: { duration: 0.25 } },
 };
 
-const widgetPositions = {
-    email_summary: "bottom-24 right-6",
-    weather: "bottom-24 left-6",
-    error: "bottom-24 left-1/2 -translate-x-1/2"
+const cardVariants = {
+    initial: { opacity: 0, x: 90, scale: 0.92, filter: 'blur(6px)' },
+    animate: { opacity: 1, x: 0, scale: 1, filter: 'blur(0px)', transition: { type: 'spring', stiffness: 200, damping: 24, delay: 0.18 } },
+    exit: { opacity: 0, x: 40, scale: 0.95, transition: { duration: 0.2 } },
 };
 
 function EmailWidget({ data, onClose, onSendEmail, onAsk }) {
-    const [expanded, setExpanded] = useState(false);
+    const [expanded, setExpanded] = React.useState(false);
     const emails = data?.emails || [];
     const count = data?.count || 0;
     const display = expanded ? emails : emails.slice(0, 3);
 
     return (
         <div className="w-[380px] backdrop-blur-2xl bg-white/5 border border-white/20 rounded-3xl shadow-[0_8px_32px_0_rgba(31,38,135,0.37)] overflow-hidden">
-            <div className="absolute inset-0 bg-[url('https://grainy-gradients.vercel.app/noise.svg')] opacity-10 pointer-events-none mix-blend-overlay"></div>
+            <div className="absolute inset-0 ada-noise opacity-10 pointer-events-none mix-blend-overlay"></div>
             <div className="relative z-10">
                 <div className="flex items-center justify-between px-5 py-4 border-b border-white/10">
                     <div className="flex items-center gap-3">
-                        <div className="p-2 bg-cyan-500/15 rounded-xl border border-cyan-500/30">
-                            <Mail size={18} className="text-cyan-300" />
+                        <div className="p-2 bg-fuchsia-500/15 rounded-xl border border-fuchsia-500/30">
+                            <Mail size={18} className="text-fuchsia-300" />
                         </div>
                         <div>
-                            <span className="text-sm font-bold text-cyan-200">Today's Email</span>
-                            <span className="text-[10px] text-cyan-300/60 block">{count} message{count !== 1 ? 's' : ''}</span>
+                            <span className="text-sm font-bold text-fuchsia-100">INBOX SUMMONED</span>
+                            <span className="text-[10px] text-fuchsia-300/60 block">{count} message{count !== 1 ? 's' : ''} · pulled from orbit</span>
                         </div>
                     </div>
                     <button onClick={onClose} className="p-1.5 hover:bg-white/10 rounded-lg text-slate-400 hover:text-rose-300 transition-colors">
                         <X size={16} />
                     </button>
                 </div>
-                <div className="px-3 py-2 max-h-[300px] overflow-y-auto">
+                <div className="px-3 py-2 max-h-[300px] overflow-y-auto custom-scrollbar">
                     {display.map((e, i) => (
-                        <div key={i} className={`p-3 rounded-2xl mb-1 transition-colors ${e.is_escalated ? 'bg-rose-500/10 border border-rose-500/20' : 'bg-white/5 border border-white/5'}`}>
+                        <motion.div
+                            key={i}
+                            initial={{ opacity: 0, x: 40 }}
+                            animate={{ opacity: 1, x: 0 }}
+                            transition={{ delay: 0.25 + i * 0.08, type: 'spring', stiffness: 260, damping: 22 }}
+                            className={`p-3 rounded-2xl mb-1 ${e.is_escalated ? 'bg-rose-500/10 border border-rose-500/20' : 'bg-white/5 border border-white/5'}`}
+                        >
                             <div className="flex items-start justify-between gap-2">
                                 <div className="min-w-0 flex-1">
                                     {e.is_escalated && (
@@ -58,7 +99,7 @@ function EmailWidget({ data, onClose, onSendEmail, onAsk }) {
                             {e.summary && (
                                 <p className="text-[11px] text-cyan-200/60 mt-1.5 line-clamp-2">{e.summary}</p>
                             )}
-                        </div>
+                        </motion.div>
                     ))}
                 </div>
                 {emails.length > 3 && (
@@ -70,7 +111,7 @@ function EmailWidget({ data, onClose, onSendEmail, onAsk }) {
                     <button onClick={() => onSendEmail && onSendEmail()} className="flex-1 py-2 text-[10px] font-semibold bg-pink-500/15 border border-pink-500/30 text-pink-200 rounded-xl hover:bg-pink-500/25 transition-colors flex items-center justify-center gap-1.5">
                         <Send size={12} /> Compose
                     </button>
-                    <button onClick={() => onAsk && onAsk("Summarize my emails")} className="flex-1 py-2 text-[10px] font-semibold bg-cyan-500/15 border border-cyan-500/30 text-cyan-200 rounded-xl hover:bg-cyan-500/25 transition-colors flex items-center justify-center gap-1.5">
+                    <button onClick={() => onAsk && onAsk('Summarize my emails')} className="flex-1 py-2 text-[10px] font-semibold bg-cyan-500/15 border border-cyan-500/30 text-cyan-200 rounded-xl hover:bg-cyan-500/25 transition-colors flex items-center justify-center gap-1.5">
                         <MessageSquare size={12} /> Ask AI
                     </button>
                 </div>
@@ -83,7 +124,7 @@ function WeatherWidget({ data, onClose }) {
     if (!data) return null;
     return (
         <div className="w-[320px] backdrop-blur-2xl bg-white/5 border border-white/20 rounded-3xl shadow-[0_8px_32px_0_rgba(31,38,135,0.37)] overflow-hidden">
-            <div className="absolute inset-0 bg-[url('https://grainy-gradients.vercel.app/noise.svg')] opacity-10 pointer-events-none mix-blend-overlay"></div>
+            <div className="absolute inset-0 ada-noise opacity-10 pointer-events-none mix-blend-overlay"></div>
             <div className="relative z-10">
                 <div className="flex items-center justify-between px-5 py-4 border-b border-white/10">
                     <div className="flex items-center gap-3">
@@ -91,7 +132,7 @@ function WeatherWidget({ data, onClose }) {
                             <CloudSun size={18} className="text-amber-300" />
                         </div>
                         <div>
-                            <span className="text-sm font-bold text-amber-200">Weather</span>
+                            <span className="text-sm font-bold text-amber-200">Weather Lock</span>
                             <span className="text-[10px] text-amber-300/60 block">{data.city}</span>
                         </div>
                     </div>
@@ -154,37 +195,91 @@ function ErrorWidget({ data, onClose }) {
     );
 }
 
+function globeMarkersFor(widget) {
+    if (!widget) return [];
+    if (widget.type === 'weather' && widget.data) {
+        // live lat/lon pins from the backend hunt win; fallback to a single pin
+        if (widget.data.markers && widget.data.markers.length) return widget.data.markers;
+        return [{ label: (widget.data.city || 'TARGET').toUpperCase(), x: 0.62, y: 0.36, hot: true }];
+    }
+    return [];
+}
+
 export default function WidgetContainer({ widgets, onDismiss, onSendEmail, onAsk }) {
     if (!widgets || widgets.length === 0) return null;
 
+    // Weather/maps owns the globe. Email has its own separate stage — never the globe.
+    const weatherSummon = widgets.find((w) => w.type === 'weather');
+    const emailSummon = widgets.find((w) => w.type === 'email_summary');
+    const toasts = widgets.filter((w) => w !== weatherSummon && w !== emailSummon);
+
     return (
-        <div className="fixed inset-0 z-[60] pointer-events-none">
+        <>
+            {/* Weather summon: globe spins up center, card docks beside it */}
             <AnimatePresence>
-                {widgets.map((w) => {
-                    const pos = widgetPositions[w.type] || "bottom-24 right-6";
-                    return (
+                {weatherSummon && (
+                    <motion.div
+                        key={weatherSummon.id}
+                        className="fixed inset-0 z-[70] flex items-center justify-center pointer-events-none"
+                        initial={{ opacity: 0 }}
+                        animate={{ opacity: 1 }}
+                        exit={{ opacity: 0 }}
+                    >
+                        {/* scrim dims the HUD so the summon owns the room */}
+                        <div className="absolute inset-0 bg-black/60 backdrop-blur-[2px] pointer-events-auto" onClick={() => onDismiss(weatherSummon.id)} />
+                        <motion.div variants={stageVariants} initial="initial" animate="animate" exit="exit" className="relative z-10 flex items-center gap-6 pointer-events-auto">
+                            <WeatherSummon data={weatherSummon.data} onClose={() => onDismiss(weatherSummon.id)} />
+                        </motion.div>
+                        <div className="absolute bottom-8 left-1/2 -translate-x-1/2 text-[10px] font-mono tracking-[0.4em] text-cyan-200/50">
+                            A.P.A SUMMON · CLICK VOID TO DISMISS
+                        </div>
+                    </motion.div>
+                )}
+            </AnimatePresence>
+
+            {/* Email summon: its own stage — card flies in alone, no globe */}
+            <AnimatePresence>
+                {emailSummon && (
+                    <motion.div
+                        key={emailSummon.id}
+                        className="fixed inset-0 z-[70] flex items-center justify-center pointer-events-none"
+                        initial={{ opacity: 0 }}
+                        animate={{ opacity: 1 }}
+                        exit={{ opacity: 0 }}
+                    >
+                        <div className="absolute inset-0 bg-black/60 backdrop-blur-[2px] pointer-events-auto" onClick={() => onDismiss(emailSummon.id)} />
+                        <motion.div
+                            initial={{ opacity: 0, y: 120, scale: 0.8, filter: 'blur(12px)' }}
+                            animate={{ opacity: 1, y: 0, scale: 1, filter: 'blur(0px)', transition: { type: 'spring', stiffness: 150, damping: 20 } }}
+                            exit={{ opacity: 0, y: -60, scale: 0.9, filter: 'blur(8px)', transition: { duration: 0.25 } }}
+                            className="relative z-10 pointer-events-auto"
+                        >
+                            <EmailWidget data={emailSummon.data} onClose={() => onDismiss(emailSummon.id)} onSendEmail={onSendEmail} onAsk={onAsk} />
+                        </motion.div>
+                        <div className="absolute bottom-8 left-1/2 -translate-x-1/2 text-[10px] font-mono tracking-[0.4em] text-fuchsia-200/50">
+                            INBOX SUMMON · CLICK VOID TO DISMISS
+                        </div>
+                    </motion.div>
+                )}
+            </AnimatePresence>
+
+            {/* Corner toasts: errors + leftovers never steal the scene */}
+            <div className="fixed inset-0 z-[60] pointer-events-none">
+                <AnimatePresence>
+                    {toasts.map((w) => (
                         <motion.div
                             key={w.id}
-                            className={`absolute ${pos} pointer-events-auto`}
-                            variants={widgetVariants}
-                            initial="initial"
-                            animate="animate"
-                            exit="exit"
+                            className="absolute bottom-24 left-1/2 -translate-x-1/2 pointer-events-auto"
+                            initial={{ opacity: 0, y: 40, scale: 0.94, filter: 'blur(4px)' }}
+                            animate={{ opacity: 1, y: 0, scale: 1, filter: 'blur(0px)', transition: { type: 'spring', stiffness: 300, damping: 25 } }}
+                            exit={{ opacity: 0, y: -20, scale: 0.95, transition: { duration: 0.2 } }}
                             layout
                         >
-                            {w.type === 'email_summary' && (
-                                <EmailWidget data={w.data} onClose={() => onDismiss(w.id)} onSendEmail={onSendEmail} onAsk={onAsk} />
-                            )}
-                            {w.type === 'weather' && (
-                                <WeatherWidget data={w.data} onClose={() => onDismiss(w.id)} />
-                            )}
-                            {w.type === 'error' && (
-                                <ErrorWidget data={w.data} onClose={() => onDismiss(w.id)} />
-                            )}
+                            <ErrorWidget data={w.data} onClose={() => onDismiss(w.id)} />
                         </motion.div>
-                    );
-                })}
-            </AnimatePresence>
-        </div>
+                    ))}
+                </AnimatePresence>
+            </div>
+        </>
     );
 }

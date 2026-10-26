@@ -7,6 +7,7 @@ import EmailWindow from './components/EmailWindow';
 import ChatModule from './components/ChatModule';
 import ToolsModule from './components/ToolsModule';
 import WidgetContainer from './components/WidgetContainer';
+import ControlOverlay from './components/ControlOverlay';
 import { Mic, MicOff, Settings, X, Minus, Power, Clock, AlertTriangle } from 'lucide-react';
 import SettingsWindow from './components/SettingsWindow';
 import ComposeWindow from './components/ComposeWindow';
@@ -719,8 +720,17 @@ function App() {
         window.removeEventListener('mouseup', handleMouseUp);
     };
 
+    // Director: single cinematic state drives orb + summon choreography
+    // idle -> listening -> thinking -> speaking -> summoning
+    const hasSummon = widgets.some((w) => w.type === 'email_summary' || w.type === 'weather');
+    const lastMsg = messages.length > 0 ? messages[messages.length - 1] : null;
     // Calculate Average Audio Amplitude for Background Pulse
     const audioAmp = aiAudioData.reduce((a, b) => a + b, 0) / aiAudioData.length / 255;
+    let adaState = 'idle';
+    if (hasSummon) adaState = 'summoning';
+    else if (status === 'Model Connected' && audioAmp > 0.02) adaState = 'speaking';
+    else if (lastMsg && lastMsg.sender === 'User') adaState = 'thinking';
+    else if (isConnected) adaState = 'listening';
 
 
 
@@ -749,7 +759,7 @@ function App() {
 
             {/* Background Grid/Effects - NEXT GEN GLASSMORPHISM */}
             <div className="absolute inset-0 bg-[radial-gradient(ellipse_at_top_right,_var(--tw-gradient-stops))] from-cyan-900/40 via-slate-950 to-purple-950/40 z-0 pointer-events-none"></div>
-            <div className="absolute inset-0 bg-[url('https://grainy-gradients.vercel.app/noise.svg')] opacity-20 z-0 pointer-events-none mix-blend-overlay"></div>
+            <div className="absolute inset-0 ada-noise opacity-20 z-0 pointer-events-none mix-blend-overlay"></div>
 
             {/* Ambient Glows */}
             <div className="absolute top-[-10%] left-[-10%] w-[500px] h-[500px] bg-cyan-500/20 rounded-full blur-[120px] pointer-events-none animate-pulse"></div>
@@ -809,12 +819,13 @@ function App() {
                     }}
                     onMouseDown={(e) => handleMouseDown(e, 'visualizer')}
                 >
-                    <div className="absolute inset-0 bg-[url('https://grainy-gradients.vercel.app/noise.svg')] opacity-10 pointer-events-none mix-blend-overlay z-10"></div>
+                    <div className="absolute inset-0 ada-noise opacity-10 pointer-events-none mix-blend-overlay z-10"></div>
                     <div className="relative z-20">
                         <Visualizer
                             audioData={aiAudioData}
                             isListening={isConnected && !isMuted}
                             intensity={audioAmp}
+                            adaState={adaState}
                             width={elementSizes.visualizer.w}
                             height={elementSizes.visualizer.h}
                         />
@@ -914,6 +925,9 @@ function App() {
                     onSendEmail={handleWidgetSendEmail}
                     onAsk={handleWidgetAsk}
                 />
+
+                {/* Computer-control takeover cinema */}
+                <ControlOverlay widgets={widgets} socket={socket} />
 
                 {/* Footer Controls / Tools Module */}
                 <div className="mt-auto flex justify-center z-50">
