@@ -14,3 +14,8 @@ google-auth-oauthlib
 # Utilities
 python-dotenv
 psutil
+# Weather / geocoding
+requests
+# Computer control (native: mouse/keyboard, window list, UI Automation)
+pyautogui
+uiautomation; sys_platform == "win32"

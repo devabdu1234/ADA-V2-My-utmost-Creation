@@ -1,950 +1,510 @@
-import React, { useEffect, useState, useRef } from 'react';
+import React, { useEffect, useRef, useState, useMemo } from 'react';
 import io from 'socket.io-client';
+import { AnimatePresence, motion } from 'framer-motion';
+import {
+    Mic, MicOff, Settings, X, Minus, Square as Maximize, Power, Mail, Target, Send,
+    Activity, CloudSun, MapPin, MonitorSmartphone, Check, Loader2, Ban, Sparkles, Eye, Crosshair, FolderOpen,
+} from 'lucide-react';
 
-import Visualizer from './components/Visualizer';
-import TopAudioBar from './components/TopAudioBar';
+import Orb3D from './components/Orb3D';
+import Stage, { ConfirmCard } from './components/holo/Stage';
+import { FocusHUD, FocusLauncher, FocusTimeline, FocusHistory, NudgeBubble } from './components/holo/Focus';
 import EmailWindow from './components/EmailWindow';
-import ChatModule from './components/ChatModule';
-import ToolsModule from './components/ToolsModule';
-import WidgetContainer from './components/WidgetContainer';
-import ControlOverlay from './components/ControlOverlay';
-import { Mic, MicOff, Settings, X, Minus, Power, Clock, AlertTriangle } from 'lucide-react';
-import SettingsWindow from './components/SettingsWindow';
 import ComposeWindow from './components/ComposeWindow';
-
+import SettingsWindow from './components/SettingsWindow';
 import ErrorBoundary from './ErrorBoundary';
+import { sfx } from './sfx';
+import { OrbHud, ScreenFrame } from './components/holo/Hud';
+import Boot from './components/holo/Boot';
+import Bluey from './components/holo/Bluey';
 
 const socket = io('http://localhost:8000');
 let ipcRenderer = null;
 try {
     ipcRenderer = window.require('electron').ipcRenderer;
 } catch (e) {
-    console.warn('Electron IPC unavailable:', e.message);
+    console.warn('Electron IPC unavailable (running in a browser):', e.message);
+}
+
+const TOOL_META = {
+    read_emails: { label: 'Scanning inbox', icon: Mail },
+    send_email: { label: 'Sending email', icon: Send },
+    get_weather: { label: 'Weather lock', icon: CloudSun },
+    show_map: { label: 'Map lock', icon: MapPin },
+    gods_eye: { label: "God's eye scan", icon: Eye },
+    computer_point: { label: 'Pointing', icon: Crosshair },
+    computer_open: { label: 'Opening', icon: FolderOpen },
+    start_focus_session: { label: 'Focus session', icon: Target },
+    control_focus_session: { label: 'Focus control', icon: Target },
+};
+const toolMeta = (name) => TOOL_META[name] || (name?.startsWith('computer_')
+    ? { label: name.replace('computer_', '').replace(/_/g, ' '), icon: MonitorSmartphone }
+    : { label: name, icon: Sparkles });
+
+function StatusChip({ on, label, warn }) {
+    return (
+        <span className={`flex items-center gap-1.5 px-2 py-0.5 rounded-full border text-[10px] tracking-[0.15em] font-mono
+            ${on ? 'border-emerald-400/30 text-emerald-200 bg-emerald-400/5' : warn ? 'border-amber-400/30 text-amber-200 bg-amber-400/5' : 'border-rose-400/30 text-rose-200 bg-rose-400/5'}`}>
+            <span className={`w-1.5 h-1.5 rounded-full ${on ? 'bg-emerald-400' : warn ? 'bg-amber-400' : 'bg-rose-400'} ${on ? 'animate-pulse' : ''}`} />
+            {label}
+        </span>
+    );
+}
+
+function DockButton({ icon: Icon, label, onClick, active, tone = 'cyan', disabled }) {
+    const tones = {
+        cyan: 'text-cyan-200 border-cyan-300/40 bg-cyan-400/10',
+        emerald: 'text-emerald-200 border-emerald-300/40 bg-emerald-400/10',
+        rose: 'text-rose-200 border-rose-300/40 bg-rose-400/10',
+        fuchsia: 'text-fuchsia-200 border-fuchsia-300/40 bg-fuchsia-400/10',
+    };
+    return (
+        <button onClick={onClick} disabled={disabled} title={label} aria-label={label}
+            className={`group flex flex-col items-center gap-1 w-16 disabled:opacity-40`}>
+            <span className={`w-12 h-12 rounded-2xl border flex items-center justify-center transition-all group-hover:scale-105
+                ${active ? tones[tone] : 'text-slate-300 border-white/10 bg-white/[0.03] group-hover:bg-white/[0.07]'}`}>
+                <Icon size={20} />
+            </span>
+            <span className="text-[10px] tracking-wider text-slate-400 group-hover:text-slate-200">{label}</span>
+        </button>
+    );
 }
 
 function App() {
-    const [status, setStatus] = useState('Disconnected');
     const [socketConnected, setSocketConnected] = useState(socket.connected);
-
-    const [isConnected, setIsConnected] = useState(true);
+    const [isApaReady, setIsApaReady] = useState(false);
+    const [isConnected, setIsConnected] = useState(true);   // user wants voice on
     const [isMuted, setIsMuted] = useState(false);
     const [messages, setMessages] = useState([]);
     const [inputValue, setInputValue] = useState('');
-    const [showEmailWindow, setShowEmailWindow] = useState(false);
-    const [showCompose, setShowCompose] = useState(false);
-    const [escalationCount, setEscalationCount] = useState(0);
-
-    const [aiAudioData, setAiAudioData] = useState(new Array(64).fill(0));
-    const [micAudioData, setMicAudioData] = useState(new Array(32).fill(0));
-    const [fps, setFps] = useState(0);
+    const [aiAudioData, setAiAudioData] = useState([0]);
+    const [micLevel, setMicLevel] = useState(0);
     const [micDevices, setMicDevices] = useState([]);
     const [speakerDevices, setSpeakerDevices] = useState([]);
-
     const [selectedMicId, setSelectedMicId] = useState(() => localStorage.getItem('selectedMicId') || '');
     const [selectedSpeakerId, setSelectedSpeakerId] = useState(() => localStorage.getItem('selectedSpeakerId') || '');
-    const [showSettings, setShowSettings] = useState(false);
-    const [isApaReady, setIsApaReady] = useState(false);
+
     const [widgets, setWidgets] = useState([]);
-    const widgetIdRef = useRef(0);
+    const [tasks, setTasks] = useState([]);
+    const [computer, setComputer] = useState({ steps: [], shot: null });
+    const [confirmQueue, setConfirmQueue] = useState([]);
+    const [focus, setFocus] = useState({ active: false });
+    const [focusHistory, setFocusHistory] = useState([]);
+    const [nudge, setNudge] = useState(null);
+    const [blueySay, setBlueySay] = useState(null);
+    const [blueyDesktop, setBlueyDesktop] = useState(true);
+    const blueyTimer = useRef(null);
+    const blueyTalk = (text, ms = 9000) => {
+        setBlueySay(text);
+        clearTimeout(blueyTimer.current);
+        blueyTimer.current = setTimeout(() => setBlueySay(null), ms);
+    };
+    const [escalationCount, setEscalationCount] = useState(0);
 
-    const [isModularMode, setIsModularMode] = useState(true);
-    const [elementPositions, setElementPositions] = useState({
-        visualizer: { x: window.innerWidth / 2, y: window.innerHeight / 2 - 60 },
-        chat: { x: window.innerWidth / 2, y: window.innerHeight / 2 + 200 },
-        email: { x: window.innerWidth / 2 - 200, y: window.innerHeight / 2 },
-        tools: { x: window.innerWidth / 2, y: window.innerHeight - 160 }
-    });
-
-    const [elementSizes, setElementSizes] = useState({
-        visualizer: { w: 550, h: 350 },
-        chat: { w: 550, h: 220 },
-        tools: { w: 500, h: 80 },
-        email: { w: 550, h: 380 }
-    });
-    const [activeDragElement, setActiveDragElement] = useState(null);
-
-    const [zIndexOrder, setZIndexOrder] = useState([
-        'visualizer', 'chat', 'tools', 'email'
-    ]);
-
-    // Web Audio Context for Mic Visualization
-    const audioContextRef = useRef(null);
-    const analyserRef = useRef(null);
-    const sourceRef = useRef(null);
-    const animationFrameRef = useRef(null);
-    const lastVideoTimeRef = useRef(-1);
-    const lastActiveDragElementRef = useRef(null);
-    const lastCursorPosRef = useRef({ x: 0, y: 0 });
-
-    const isModularModeRef = useRef(isModularMode);
-    const elementPositionsRef = useRef(elementPositions);
-    const activeDragElementRef = useRef(null);
-
-    // Mouse Drag Refs
-    const dragOffsetRef = useRef({ x: 0, y: 0 });
-    const isDraggingRef = useRef(false);
-
-    // Update refs when state changes
+    const [showSettings, setShowSettings] = useState(false);
+    const [showInbox, setShowInbox] = useState(false);
+    const [showCompose, setShowCompose] = useState(false);
+    const [showFocus, setShowFocus] = useState(false);
+    const [rightTab, setRightTab] = useState('log');
+    const [clock, setClock] = useState(new Date());
+    const [booting, setBooting] = useState(true);
+    const [mouse, setMouse] = useState({ x: 0, y: 0 });
     useEffect(() => {
-        isModularModeRef.current = isModularMode;
-        elementPositionsRef.current = elementPositions;
-    }, [isModularMode, elementPositions]);
-
-    // Centering Logic (Startup & Resize)
-    useEffect(() => {
-        const centerElements = () => {
-            const width = window.innerWidth;
-            const height = window.innerHeight;
-
-            // Calculate available vertical space
-            // Tools is fixed at bottom ~100px space
-            const toolsY = height - 100;
-            // ToolsModule uses translate(-50%, -50%). So its Center Y.
-            // Let's reserve bottom 140px for tools to be safe and float it nicely.
-            const toolsCenterY = height - 100;
-
-            const gap = 20;
-
-            // Chat: Anchor is Top-Center (translate(-50%, 0)).
-            // We want Chat Bottom to be above Tools Top.
-            // Tools Top = toolsCenterY - (ToolsHeight/2) approx 40 = height - 140;
-            const chatBottomLimit = height - 140;
-
-            // Dynamic Height Calculation to fit screen
-            // Standard Heights
-            let vizH = 400;
-            let chatH = 250;
-            const topBarHeight = 60;
-
-            // Total needed: TopBar + Viz + Gap + Chat + Gap + Tools (140 reserved)
-            const totalNeeded = topBarHeight + vizH + gap + chatH + gap + 140;
-
-            if (height < totalNeeded) {
-                // Scale down
-                const available = height - topBarHeight - 140 - (gap * 2);
-                // Allocate 60% to Viz, 40% to Chat
-                vizH = available * 0.6;
-                chatH = available * 0.4;
-            }
-
-            // Positions
-            // Visualizer (Center Anchored)
-            // Top of Viz = TopBarHeight. Center = TopBarHeight + VizH/2
-            const vizY = topBarHeight + (vizH / 2); // Removed buffer
-
-            // Chat (Top Anchored)
-            // Top of Chat = TopBarHeight + VizH + Gap
-            const chatY = topBarHeight + vizH + gap;
-
-            setElementSizes(prev => ({
-                ...prev,
-                visualizer: { w: Math.min(600, width * 0.8), h: vizH },
-                chat: { w: Math.min(600, width * 0.9), h: chatH }
-            }));
-
-            setElementPositions(prev => ({
-                ...prev,
-                visualizer: {
-                    x: width / 2,
-                    y: vizY
-                },
-                chat: {
-                    x: width / 2,
-                    y: chatY
-                },
-                tools: {
-                    x: width / 2,
-                    y: toolsCenterY
-                }
-            }));
+        let raf = 0;
+        const mv = (e) => {
+            cancelAnimationFrame(raf);
+            raf = requestAnimationFrame(() => setMouse({ x: e.clientX / window.innerWidth - 0.5, y: e.clientY / window.innerHeight - 0.5 }));
         };
-
-        // Center on mount
-        centerElements();
-
-        // Center on resize
-        window.addEventListener('resize', centerElements);
-        return () => window.removeEventListener('resize', centerElements);
+        window.addEventListener('mousemove', mv);
+        return () => window.removeEventListener('mousemove', mv);
     }, []);
 
-    // Utility: Clamp position to viewport so component stays fully visible
-    const clampToViewport = (pos, size) => {
-        const margin = 10;
-        const topBarHeight = 60;
-        const width = window.innerWidth;
-        const height = window.innerHeight;
+    const widgetId = useRef(0);
+    const chatEnd = useRef(null);
+    const audioCtx = useRef(null);
+    const micRaf = useRef(null);
+    const micSrc = useRef(null);
+    const autoStarted = useRef(false);
 
-        return {
-            x: Math.max(size.w / 2 + margin, Math.min(width - size.w / 2 - margin, pos.x)),
-            y: Math.max(size.h / 2 + margin + topBarHeight, Math.min(height - size.h / 2 - margin, pos.y))
-        };
+    const addMessage = (sender, text) => setMessages((p) => [...p, { sender, text, time: new Date().toLocaleTimeString() }]);
+    const pushWidget = (w) => {
+        widgetId.current += 1;
+        const nw = { id: `w-${widgetId.current}`, ...w };
+        setWidgets((prev) => [...prev.filter((x) => x.type !== w.type), nw]);
+        return nw;
     };
+    const dismissWidget = (id) => setWidgets((prev) => prev.filter((w) => w.id !== id));
 
-    // Utility: Get z-index for an element based on stacking order
-    const getZIndex = (id) => {
-        const baseZ = 30; // Above background elements
-        const index = zIndexOrder.indexOf(id);
-        return baseZ + (index >= 0 ? index : 0);
-    };
-
-    // Utility: Bring element to front (highest z-index)
-    const bringToFront = (id) => {
-        setZIndexOrder(prev => {
-            const filtered = prev.filter(el => el !== id);
-            return [...filtered, id]; // Move to end = highest z-index
-        });
-    };
-
-    const hasAutoConnectedRef = useRef(false);
-
+    /* ------------------------------------------------------ socket ---- */
     useEffect(() => {
-        if (isConnected && socketConnected && micDevices.length > 0 && !hasAutoConnectedRef.current) {
-            hasAutoConnectedRef.current = true;
-            const timer = setTimeout(() => {
-                const index = micDevices.findIndex(d => d.deviceId === selectedMicId);
-                const queryDevice = micDevices.find(d => d.deviceId === selectedMicId);
-                const deviceName = queryDevice ? queryDevice.label : null;
-                setStatus('Connecting...');
-                socket.emit('start_audio', {
-                    device_index: index >= 0 ? index : null,
-                    device_name: deviceName,
-                    muted: isMuted
+        const t = setInterval(() => setClock(new Date()), 1000);
+        socket.on('connect', () => { setSocketConnected(true); socket.emit('get_settings'); socket.emit('focus_history'); setTimeout(() => blueyTalk("Hi! I'm Bluey, your focus buddy. Tap me to start focusing!", 7000), 8200); });
+        socket.on('disconnect', () => { setSocketConnected(false); setIsApaReady(false); });
+        socket.on('status', (d) => {
+            if (d.msg === 'A.P.A Started' || d.msg === 'A.P.A Already Running') setIsApaReady(true);
+            else if (d.msg === 'A.P.A Stopped') setIsApaReady(false);
+            if (!['Connected to A.P.A Backend'].includes(d.msg)) addMessage('System', d.msg);
+        });
+        socket.on('audio_data', (d) => setAiAudioData(d.data || [0]));
+        socket.on('error', (d) => pushWidget({ type: 'error', data: { title: 'System fault', message: d.msg } }));
+        socket.on('transcription', (d) => {
+            setMessages((prev) => {
+                const last = prev[prev.length - 1];
+                if (last && last.sender === d.sender) return [...prev.slice(0, -1), { ...last, text: last.text + d.text }];
+                return [...prev, { sender: d.sender, text: d.text, time: new Date().toLocaleTimeString() }];
+            });
+        });
+        // Real approval gate (the old UI auto-approved every request).
+        socket.on('tool_confirmation_request', (d) => { if (d?.id) { sfx.alert(); setConfirmQueue((q) => [...q, d]); } });
+        socket.on('widget_update', (d) => {
+            if (!d?.type) return;
+            if (d.type === 'task') {
+                setTasks((prev) => {
+                    const i = prev.findIndex((t) => t.id === d.data.id);
+                    const entry = { ...(i >= 0 ? prev[i] : { started: Date.now() }), ...d.data, updated: Date.now() };
+                    if (i >= 0) { const n = [...prev]; n[i] = entry; return n; }
+                    sfx.blip();
+                    return [...prev, entry].slice(-60);
                 });
-            }, 500);
-        }
-    }, [isConnected, socketConnected, micDevices, selectedMicId]);
-
-    useEffect(() => {
-        // Socket IO Setup
-        socket.on('connect', () => {
-            setStatus('Connected');
-            setSocketConnected(true);
-            socket.emit('get_settings');
-        });
-        socket.on('disconnect', () => {
-            setStatus('Disconnected');
-            setSocketConnected(false);
-        });
-        socket.on('status', (data) => {
-            addMessage('System', data.msg);
-            if (data.msg === 'A.P.A Started') {
-                setStatus('Model Connected');
-                setIsApaReady(true);
-            } else if (data.msg === 'A.P.A Stopped') {
-                setStatus('Connected');
+                return;
             }
+            if (d.type === 'computer_control') {
+                setComputer((c) => {
+                    const steps = [...c.steps];
+                    const last = steps[steps.length - 1];
+                    if (last && last.tool === d.data.tool && last.state === 'active') steps[steps.length - 1] = d.data;
+                    else steps.push(d.data);
+                    return { ...c, steps: steps.slice(-30) };
+                });
+                setWidgets((prev) => (prev.some((w) => w.type === 'computer') ? prev : [...prev, { id: `w-c${Date.now()}`, type: 'computer' }]));
+                return;
+            }
+            if (d.type === 'computer_screenshot') { setComputer((c) => ({ ...c, shot: d.data.image })); return; }
+            if (d.type === 'focus_nudge') { sfx.chirp(); setNudge({ id: Date.now(), ...d.data }); blueyTalk(d.data.text + (d.data.point_text ? ` Look at: "${d.data.point_text}"` : ''), 12000); return; }
+            const w = pushWidget(d);
+            if (d.type === 'error') setTimeout(() => dismissWidget(w.id), 15000);
+            else sfx.summon();
+            if (d.type === 'email_summary') setEscalationCount(d.data?.escalation_count || 0);
         });
-        socket.on('audio_data', (data) => {
-            setAiAudioData(data.data);
-        });
-        socket.on('error', (data) => {
-            console.error("Socket Error:", data);
-            addMessage('System', `Error: ${data.msg}`);
-        });
-        socket.on('widget_move', (data) => {
-            console.log(`[widget_move] ${data.widget_id} → (${data.x}, ${data.y})`);
-            setElementPositions(prev => ({
-                ...prev,
-                [data.widget_id]: { x: data.x, y: data.y }
-            }));
+        socket.on('focus_state', (d) => setFocus((prev) => {
+            if (d.active && !prev.active) blueyTalk(`Focus mode on: ${d.task}. I've got your back!`, 6000);
+            if (!d.active && prev.active) blueyTalk('Session done. Nice work!', 6000);
+            return d;
+        }));
+        socket.on('bluey_state', (d) => setBlueyDesktop(!!d.on));
+        socket.on('focus_history', (d) => setFocusHistory(d.sessions || []));
+        socket.on('focus_ended', (d) => {
+            addMessage('System', `Focus session ended (${d.reason}).`);
+            socket.emit('focus_history');
         });
 
-        // Handle Today's Emails
-        socket.on('today_emails', (data) => {
-            console.log("Received Today's Emails:", data.count);
-
-        });
-
-        // Handle streaming transcription
-        socket.on('transcription', (data) => {
-            setMessages(prev => {
-                const lastMsg = prev[prev.length - 1];
-
-                // If the last message is from the same sender, append the chunk
-                if (lastMsg && lastMsg.sender === data.sender) {
-                    // Create a NEW object instead of mutating (prevents React StrictMode duplication)
-                    return [
-                        ...prev.slice(0, -1),
-                        {
-                            ...lastMsg,
-                            text: lastMsg.text + data.text
-                        }
-                    ];
-                } else {
-                    // New message block
-                    return [...prev, {
-                        sender: data.sender,
-                        text: data.text,
-                        time: new Date().toLocaleTimeString()
-                    }];
-                }
+        navigator.mediaDevices?.getUserMedia({ audio: true })
+            .then((s) => { s.getTracks().forEach((t) => t.stop()); return navigator.mediaDevices.enumerateDevices(); })
+            .catch(() => navigator.mediaDevices?.enumerateDevices())
+            .then((devs = []) => {
+                const ins = devs.filter((d) => d.kind === 'audioinput');
+                const outs = devs.filter((d) => d.kind === 'audiooutput');
+                setMicDevices(ins);
+                setSpeakerDevices(outs);
+                const savedMic = localStorage.getItem('selectedMicId');
+                if (!(savedMic && ins.some((d) => d.deviceId === savedMic)) && ins.length) setSelectedMicId(ins[0].deviceId);
+                const savedSpk = localStorage.getItem('selectedSpeakerId');
+                if (!(savedSpk && outs.some((d) => d.deviceId === savedSpk)) && outs.length) setSelectedSpeakerId(outs[0].deviceId);
             });
-        });
-
-        socket.on('tool_confirmation_request', (data) => {
-            console.log("Received Confirmation Request:", data);
-            if (data && data.id) {
-                socket.emit('resolve_confirmation', { id: data.id, confirmed: true });
-            }
-        });
-
-        // Widget updates from backend (email summary, errors)
-        socket.on('widget_update', (data) => {
-            widgetIdRef.current += 1;
-            const newWidget = { id: `widget-${widgetIdRef.current}`, ...data };
-            setWidgets(prev => {
-                const filtered = prev.filter(w => w.type !== data.type);
-                return [...filtered, newWidget];
-            });
-            if (data.type === 'error') {
-                setTimeout(() => {
-                    setWidgets(prev => prev.filter(w => w.id !== newWidget.id));
-                }, 15000);
-            }
-            if (data.type === 'email_summary' && data.data) {
-                setEscalationCount(data.data.escalation_count || 0);
-            }
-        });
-
-
-
-        // Request mic permission first, then enumerate devices
-        navigator.mediaDevices.getUserMedia({ audio: true }).then(stream => {
-            stream.getTracks().forEach(t => t.stop());
-            return navigator.mediaDevices.enumerateDevices();
-        }).catch(() => navigator.mediaDevices.enumerateDevices()).then(devs => {
-            const audioInputs = devs.filter(d => d.kind === 'audioinput');
-            const audioOutputs = devs.filter(d => d.kind === 'audiooutput');
-
-            setMicDevices(audioInputs);
-            setSpeakerDevices(audioOutputs);
-
-            // Restore saved microphone or use first available
-            const savedMicId = localStorage.getItem('selectedMicId');
-            if (savedMicId && audioInputs.some(d => d.deviceId === savedMicId)) {
-                setSelectedMicId(savedMicId);
-            } else if (audioInputs.length > 0) {
-                setSelectedMicId(audioInputs[0].deviceId);
-            }
-
-            // Restore saved speaker or use first available
-            const savedSpeakerId = localStorage.getItem('selectedSpeakerId');
-            if (savedSpeakerId && audioOutputs.some(d => d.deviceId === savedSpeakerId)) {
-                setSelectedSpeakerId(savedSpeakerId);
-            } else if (audioOutputs.length > 0) {
-                setSelectedSpeakerId(audioOutputs[0].deviceId);
-            }
-
-        });
 
         return () => {
-            socket.off('connect');
-            socket.off('disconnect');
-            socket.off('status');
-            socket.off('audio_data');
-            socket.off('widget_move');
-            socket.off('transcription');
-            socket.off('tool_confirmation_request');
-            socket.off('widget_update');
-            socket.off('error');
-
-            stopMicVisualizer();
+            clearInterval(t);
+            ['connect', 'disconnect', 'status', 'audio_data', 'error', 'transcription', 'tool_confirmation_request',
+                'widget_update', 'focus_state', 'focus_history', 'focus_ended', 'bluey_state'].forEach((e) => socket.off(e));
         };
     }, []);
 
-    // Initial check in case we are already connected (fix race condition)
+    // Auto-start voice once backend + mic are ready.
     useEffect(() => {
-        if (socket.connected) {
-            setStatus('Connected');
-            socket.emit('get_settings');
+        if (isConnected && socketConnected && micDevices.length > 0 && !autoStarted.current) {
+            autoStarted.current = true;
+            const idx = micDevices.findIndex((d) => d.deviceId === selectedMicId);
+            const dev = micDevices[idx];
+            socket.emit('start_audio', { device_index: idx >= 0 ? idx : null, device_name: dev ? dev.label : null, muted: isMuted });
         }
-    }, []);
+        if (!socketConnected) autoStarted.current = false;
+    }, [isConnected, socketConnected, micDevices, selectedMicId]);
 
-    // Persist device selections to localStorage when they change
+    useEffect(() => { if (selectedMicId) localStorage.setItem('selectedMicId', selectedMicId); }, [selectedMicId]);
+    useEffect(() => { if (selectedSpeakerId) localStorage.setItem('selectedSpeakerId', selectedSpeakerId); }, [selectedSpeakerId]);
+    useEffect(() => { chatEnd.current?.scrollIntoView({ behavior: 'smooth' }); }, [messages]);
+
+    // Mic level for the orb.
     useEffect(() => {
-        if (selectedMicId) {
-            localStorage.setItem('selectedMicId', selectedMicId);
-            console.log('[Settings] Saved microphone:', selectedMicId);
-        }
-    }, [selectedMicId]);
-
-    useEffect(() => {
-        if (selectedSpeakerId) {
-            localStorage.setItem('selectedSpeakerId', selectedSpeakerId);
-            console.log('[Settings] Saved speaker:', selectedSpeakerId);
-        }
-    }, [selectedSpeakerId]);
-
-    // Start/Stop Mic Visualizer
-    useEffect(() => {
-        if (selectedMicId) {
-            startMicVisualizer(selectedMicId);
-        }
-    }, [selectedMicId]);
-
-    const startMicVisualizer = async (deviceId) => {
-        stopMicVisualizer();
-        try {
-            const stream = await navigator.mediaDevices.getUserMedia({
-                audio: { deviceId: { exact: deviceId } }
-            });
-
-            audioContextRef.current = new (window.AudioContext || window.webkitAudioContext)();
-            analyserRef.current = audioContextRef.current.createAnalyser();
-            analyserRef.current.fftSize = 64;
-
-            sourceRef.current = audioContextRef.current.createMediaStreamSource(stream);
-            sourceRef.current.connect(analyserRef.current);
-
-            const updateMicData = () => {
-                if (!analyserRef.current) return;
-                const dataArray = new Uint8Array(analyserRef.current.frequencyBinCount);
-                analyserRef.current.getByteFrequencyData(dataArray);
-                setMicAudioData(Array.from(dataArray));
-                animationFrameRef.current = requestAnimationFrame(updateMicData);
+        if (!selectedMicId || !navigator.mediaDevices) return;
+        let stopped = false;
+        navigator.mediaDevices.getUserMedia({ audio: { deviceId: { exact: selectedMicId } } }).then((stream) => {
+            if (stopped) return;
+            audioCtx.current = new (window.AudioContext || window.webkitAudioContext)();
+            const an = audioCtx.current.createAnalyser();
+            an.fftSize = 64;
+            micSrc.current = audioCtx.current.createMediaStreamSource(stream);
+            micSrc.current.connect(an);
+            const buf = new Uint8Array(an.frequencyBinCount);
+            let last = 0;
+            const loop = (ts) => {
+                an.getByteFrequencyData(buf);
+                if (ts - last > 50) { last = ts; setMicLevel(buf.reduce((a, b) => a + b, 0) / buf.length / 255); }
+                micRaf.current = requestAnimationFrame(loop);
             };
+            micRaf.current = requestAnimationFrame(loop);
+        }).catch(() => {});
+        return () => {
+            stopped = true;
+            if (micRaf.current) cancelAnimationFrame(micRaf.current);
+            try { micSrc.current?.disconnect(); audioCtx.current?.close(); } catch (e) { /* ignore */ }
+        };
+    }, [selectedMicId]);
 
-            updateMicData();
-        } catch (err) {
-            console.error("Error accessing microphone:", err);
-        }
-    };
-
-    const stopMicVisualizer = () => {
-        if (animationFrameRef.current) cancelAnimationFrame(animationFrameRef.current);
-        if (sourceRef.current) sourceRef.current.disconnect();
-        if (audioContextRef.current) audioContextRef.current.close();
-    };
-
-    const addMessage = (sender, text) => {
-        setMessages(prev => [...prev, { sender, text, time: new Date().toLocaleTimeString() }]);
-    };
-
-    const playStartupChime = () => {
-        try {
-            const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
-            const now = audioCtx.currentTime;
-            // Rising C major arpeggio: C5, E5, G5, C6
-            const notes = [523.25, 659.25, 783.99, 1046.50];
-            notes.forEach((freq, i) => {
-                const osc = audioCtx.createOscillator();
-                const gain = audioCtx.createGain();
-                osc.type = 'sine';
-                osc.frequency.value = freq;
-                const t = now + i * 0.15;
-                gain.gain.setValueAtTime(0, t);
-                gain.gain.linearRampToValueAtTime(0.12, t + 0.04);
-                gain.gain.exponentialRampToValueAtTime(0.001, t + 1.0);
-                osc.connect(gain);
-                gain.connect(audioCtx.destination);
-                osc.start(t);
-                osc.stop(t + 1.1);
-            });
-            // Sub bass pulse underneath
-            const bass = audioCtx.createOscillator();
-            const bassGain = audioCtx.createGain();
-            bass.type = 'sine';
-            bass.frequency.value = 65.41; // C2
-            bassGain.gain.setValueAtTime(0, now);
-            bassGain.gain.linearRampToValueAtTime(0.15, now + 0.3);
-            bassGain.gain.exponentialRampToValueAtTime(0.001, now + 1.5);
-            bass.connect(bassGain);
-            bassGain.connect(audioCtx.destination);
-            bass.start(now);
-            bass.stop(now + 1.6);
-        } catch (e) {
-            console.log("Chime playback skipped:", e);
-        }
-    };
-
-    const dismissWidget = (id) => {
-        setWidgets(prev => prev.filter(w => w.id !== id));
-    };
-
-    const handleWidgetSendEmail = () => {
-        setShowEmailWindow(true);
-        socket.emit('fetch_today_emails');
-        const size = { w: 550, h: 380 };
-        const clamped = clampToViewport({ x: window.innerWidth / 2, y: window.innerHeight / 2 }, size);
-        setElementPositions(prev => ({ ...prev, email: clamped }));
-    };
-
-    const handleWidgetAsk = (text) => {
-        socket.emit('user_input', { text });
-    };
-
-    const triggerEmailIntro = (count) => {
-        if (count === 0) {
-            socket.emit('user_input', { text: "You have no emails today. Say: 'No new messages in your inbox, sir.'" });
-        } else {
-            socket.emit('user_input', { text: `I just fetched your emails. You have ${count} new messages today. Please say: 'Sir, these are today's emails that were in your inbox. Shall I read them out loud or would you prefer to handle them yourself?' Then briefly summarize the top 3 subjects.` });
-        }
-    };
-
+    /* ----------------------------------------------------- actions ---- */
     const togglePower = () => {
-        if (isConnected) {
-            socket.emit('stop_audio');
-            setIsConnected(false);
-            setIsMuted(false); // Reset mute state
-        } else {
-            const index = micDevices.findIndex(d => d.deviceId === selectedMicId);
-            socket.emit('start_audio', { device_index: index >= 0 ? index : null });
-            setIsConnected(true);
-            setIsMuted(false); // Start unmuted
+        if (isConnected) { socket.emit('stop_audio'); setIsConnected(false); setIsMuted(false); }
+        else {
+            const idx = micDevices.findIndex((d) => d.deviceId === selectedMicId);
+            socket.emit('start_audio', { device_index: idx >= 0 ? idx : null });
+            setIsConnected(true); setIsMuted(false);
         }
     };
-
-
     const toggleMute = () => {
-        if (!isConnected) return; // Can't mute if not connected
+        if (!isConnected) return;
+        socket.emit(isMuted ? 'resume_audio' : 'pause_audio');
+        setIsMuted(!isMuted);
+    };
+    const sendText = (text) => {
+        if (!text.trim()) return;
+        socket.emit('user_input', { text });
+        addMessage('User', text);
+    };
+    const resolveConfirm = (ok) => {
+        const req = confirmQueue[0];
+        if (!req) return;
+        socket.emit('resolve_confirmation', { id: req.id, confirmed: ok });
+        setConfirmQueue((q) => q.slice(1));
+    };
+    const focusControl = (action) => socket.emit('focus_control', { action });
+    const openInbox = () => { setShowInbox(true); socket.emit('fetch_today_emails'); };
 
-        if (isMuted) {
-            socket.emit('resume_audio');
-            setIsMuted(false);
-        } else {
-            socket.emit('pause_audio');
-            setIsMuted(true);
-        }
+    const handleClose = () => {
+        const close = () => ipcRenderer?.send('window-close');
+        if (socket.connected) { socket.emit('shutdown', {}, close); setTimeout(close, 500); } else close();
     };
 
-    const handleSend = (e) => {
-        if (e.key === 'Enter' && inputValue.trim()) {
-            socket.emit('user_input', { text: inputValue });
-            addMessage('You', inputValue);
-            setInputValue('');
-        }
+    /* ------------------------------------------------------- state ---- */
+    const audioAmp = aiAudioData.reduce((a, b) => a + b, 0) / Math.max(1, aiAudioData.length) / 255;
+    const mainSummon = widgets.some((w) => ['weather', 'map', 'email_summary', 'computer', 'gods_eye'].includes(w.type));
+    const running = tasks.some((t) => t.state === 'running');
+    const lastMsg = messages[messages.length - 1];
+
+    let orbState = 'idle';
+    if (!socketConnected) orbState = 'offline';
+    else if (confirmQueue.length) orbState = 'alert';
+    else if (mainSummon) orbState = 'summoning';
+    else if (isApaReady && audioAmp > 0.02) orbState = 'speaking';
+    else if (running || (lastMsg && lastMsg.sender === 'User')) orbState = 'thinking';
+    else if (focus.active && !focus.paused) orbState = 'focus';
+    else if (isApaReady && isConnected && !isMuted) orbState = 'listening';
+
+    const orbLevel = orbState === 'speaking' ? Math.min(1, audioAmp * 3) : orbState === 'listening' ? Math.min(1, micLevel * 1.6) : 0;
+    const STATE_TEXT = {
+        offline: 'BACKEND OFFLINE', idle: isConnected ? 'STANDING BY' : 'VOICE OFF', listening: 'LISTENING',
+        thinking: 'PROCESSING', speaking: 'SPEAKING', summoning: 'DISPLAYING', focus: 'GUARDING YOUR FOCUS', alert: 'AWAITING AUTHORISATION',
     };
+    const caption = useMemo(() => {
+        const m = [...messages].reverse().find((x) => x.sender === 'ADA');
+        return m ? m.text.slice(-160) : '';
+    }, [messages]);
 
-    const handleMinimize = () => ipcRenderer.send('window-minimize');
-    const handleMaximize = () => ipcRenderer.send('window-maximize');
-
-    // Close Application - memory is now actively saved to project, no prompt needed
-    const handleCloseRequest = () => {
-        // Emit shutdown signal to backend for graceful shutdown
-        // Use volatile emit with timeout fallback to ensure window closes even if server is unresponsive
-        const closeWindow = () => ipcRenderer.send('window-close');
-
-        if (socket.connected) {
-            console.log('[APP] Sending shutdown signal to backend...');
-            socket.emit('shutdown', {}, (ack) => {
-                // This callback may not be called if server uses os._exit
-                console.log('[APP] Shutdown acknowledged');
-                closeWindow();
-            });
-            // Fallback: close after 500ms if ack doesn't come back
-            setTimeout(closeWindow, 500);
-        } else {
-            // Socket not connected, just close
-            closeWindow();
-        }
-    };
-
-    const handleFileUpload = (e) => {
-        const file = e.target.files[0];
-        if (!file) return;
-
-        const reader = new FileReader();
-        reader.onload = (event) => {
-            try {
-                const textContent = event.target.result;
-                // Just send the text content directly
-                if (typeof textContent === 'string' && textContent.length > 0) {
-                    socket.emit('upload_memory', { memory: textContent });
-                    addMessage('System', 'Uploading memory...');
-                } else {
-                    addMessage('System', 'Empty or invalid memory file');
-                }
-            } catch (err) {
-                console.error("Error reading file:", err);
-                addMessage('System', 'Error reading memory file');
-            }
-        };
-        reader.readAsText(file);
-    };
-
-    // Updated Bounds Checking Logic
-    const updateElementPosition = (id, dx, dy) => {
-        setElementPositions(prev => {
-            const currentPos = prev[id];
-            const size = elementSizes[id] || { w: 100, h: 100 }; // Fallback
-            let newX = currentPos.x + dx;
-            let newY = currentPos.y + dy;
-
-            // Bounds Logic
-            // Depends on anchor point.
-            // Visualizer, Tools, Cad, Browser, Kasa: translate(-50%, -50%) -> Center Anchor
-            // Chat: translate(-50%, 0) -> Top-Center Anchor
-            // Video: Top-Left Anchor (default div)
-
-            const width = window.innerWidth;
-            const height = window.innerHeight;
-            const margin = 0; // Strict bounds
-
-            if (id === 'chat') {
-                // Anchor: Top-Center (x is center, y is top)
-                // X Bounds: size.w/2 <= x <= width - size.w/2
-                newX = Math.max(size.w / 2 + margin, Math.min(width - size.w / 2 - margin, newX));
-                // Y Bounds: 0 <= y <= height - size.h
-                newY = Math.max(margin, Math.min(height - size.h - margin, newY));
-
-            } else if (id === 'video') {
-                // Anchor: Top-Left
-                newX = Math.max(margin, Math.min(width - size.w - margin, newX));
-                newY = Math.max(margin, Math.min(height - size.h - margin, newY));
-
-            } else {
-                // Anchor: Center
-                newX = Math.max(size.w / 2 + margin, Math.min(width - size.w / 2 - margin, newX));
-                newY = Math.max(size.h / 2 + margin, Math.min(height - size.h / 2 - margin, newY));
-            }
-
-            return {
-                ...prev,
-                [id]: {
-                    x: newX,
-                    y: newY
-                }
-            };
-        });
-    };
-
-    // --- MOUSE DRAG HANDLERS ---
-    const handleMouseDown = (e, id) => {
-        console.log(`[MouseDrag] MouseDown on ${id}`, { target: e.target.tagName });
-
-        // Fixed elements that should never be draggable (even in modular mode)
-        const fixedElements = ['visualizer', 'chat', 'tools'];
-        if (fixedElements.includes(id)) {
-            console.log(`[MouseDrag] ${id} is a fixed element, not draggable`);
-            return;
-        }
-
-        // Bring clicked element to front (z-index)
-        bringToFront(id);
-
-        // Prevent dragging if interacting with inputs, buttons, or canvas (for 3D controls)
-        const tagName = e.target.tagName.toLowerCase();
-        if (tagName === 'input' || tagName === 'button' || tagName === 'textarea' || tagName === 'canvas' || e.target.closest('button')) {
-            console.log("[MouseDrag] Interaction blocked by interactive element");
-            return;
-        }
-
-        // Check if clicking on a drag handle section (data-drag-handle attribute)
-        const isDragHandle = e.target.closest('[data-drag-handle]');
-        if (!isDragHandle && !isModularModeRef.current) {
-            // If not clicking a drag handle and modular mode is off, don't drag
-            // This allows popup windows to have dedicated drag areas
-            console.log("[MouseDrag] Not a drag handle and modular mode off");
-            return;
-        }
-
-        const elPos = elementPositions[id];
-        if (!elPos) return;
-
-        // Calculate offset based on anchor point
-        // Most are Center Anchored (x, y is center)
-        // Chat is Top-Center Anchored (x is center, y is top)
-        // Video is Top-Left Anchored (x is left, y is top)
-
-        // We want: MousePos = ElementPos + Offset
-        // So: Offset = MousePos - ElementPos
-        dragOffsetRef.current = {
-            x: e.clientX - elPos.x,
-            y: e.clientY - elPos.y
-        };
-
-        setActiveDragElement(id);
-        activeDragElementRef.current = id;
-        isDraggingRef.current = true;
-
-        window.addEventListener('mousemove', handleMouseDrag);
-        window.addEventListener('mouseup', handleMouseUp);
-    };
-
-    const handleMouseDrag = (e) => {
-        if (!isDraggingRef.current || !activeDragElementRef.current) return;
-
-        const id = activeDragElementRef.current;
-        const currentPos = elementPositionsRef.current[id];
-        if (!currentPos) return;
-
-        // Target Position = MousePos - Offset
-        // But we want delta for updateElementPosition??
-        // actually updateElementPosition takes dx, dy.
-        // Let's just set the position directly or calculate delta.
-        // Since updateElementPosition has bounds logic, let's use it, but we need delta from PREVIOUS position?
-        // OR we can refactor updateElementPosition to take absolute.
-        // Let's stick to calculating new position and manually updating state with bounds logic inside a setter.
-
-        // Actually, updateElementPosition uses setElementPositions(prev => ...).
-        // Let's duplicate bounds logic for mouse drag to be precise or reuse.
-        // reusing updateElementPosition requires calculating dx/dy from *current state* which might be lagging in the closure?
-        // No, functional update is fine.
-
-        // But for smooth mouse drag, absolute position is better.
-        const rawNewX = e.clientX - dragOffsetRef.current.x;
-        const rawNewY = e.clientY - dragOffsetRef.current.y;
-
-        setElementPositions(prev => {
-            const size = elementSizes[id] || { w: 100, h: 100 }; // Fallback
-            let newX = rawNewX;
-            let newY = rawNewY;
-
-            const width = window.innerWidth;
-            const height = window.innerHeight;
-            const margin = 0;
-
-            if (id === 'chat') {
-                newX = Math.max(size.w / 2 + margin, Math.min(width - size.w / 2 - margin, newX));
-                newY = Math.max(margin, Math.min(height - size.h - margin, newY));
-            } else if (id === 'video') {
-                newX = Math.max(margin, Math.min(width - size.w - margin, newX));
-                newY = Math.max(margin, Math.min(height - size.h - margin, newY));
-            } else {
-                newX = Math.max(size.w / 2 + margin, Math.min(width - size.w / 2 - margin, newX));
-                newY = Math.max(size.h / 2 + margin, Math.min(height - size.h / 2 - margin, newY));
-            }
-
-            return {
-                ...prev,
-                [id]: { x: newX, y: newY }
-            };
-        });
-    };
-
-    const handleMouseUp = () => {
-        isDraggingRef.current = false;
-        setActiveDragElement(null);
-        activeDragElementRef.current = null;
-        window.removeEventListener('mousemove', handleMouseDrag);
-        window.removeEventListener('mouseup', handleMouseUp);
-    };
-
-    // Director: single cinematic state drives orb + summon choreography
-    // idle -> listening -> thinking -> speaking -> summoning
-    const hasSummon = widgets.some((w) => w.type === 'email_summary' || w.type === 'weather');
-    const lastMsg = messages.length > 0 ? messages[messages.length - 1] : null;
-    // Calculate Average Audio Amplitude for Background Pulse
-    const audioAmp = aiAudioData.reduce((a, b) => a + b, 0) / aiAudioData.length / 255;
-    let adaState = 'idle';
-    if (hasSummon) adaState = 'summoning';
-    else if (status === 'Model Connected' && audioAmp > 0.02) adaState = 'speaking';
-    else if (lastMsg && lastMsg.sender === 'User') adaState = 'thinking';
-    else if (isConnected) adaState = 'listening';
-
-
-
-    const toggleEmailWindow = () => {
-        if (!showEmailWindow) {
-            setShowEmailWindow(true);
-            socket.emit('fetch_today_emails');
-            const size = { w: 550, h: 380 };
-            const clamped = clampToViewport({ x: window.innerWidth / 2, y: window.innerHeight / 2 }, size);
-            setElementPositions(prev => ({
-                ...prev,
-                email: clamped
-            }));
-        } else {
-            setShowEmailWindow(false);
-        }
-    };
-
-
-
+    /* ------------------------------------------------------ render ---- */
     return (
         <ErrorBoundary>
-        <div className="absolute inset-0 bg-black text-cyan-100 font-mono overflow-hidden flex flex-col selection:bg-cyan-900 selection:text-white">
-
-            {/* Main UI */}
-
-            {/* Background Grid/Effects - NEXT GEN GLASSMORPHISM */}
-            <div className="absolute inset-0 bg-[radial-gradient(ellipse_at_top_right,_var(--tw-gradient-stops))] from-cyan-900/40 via-slate-950 to-purple-950/40 z-0 pointer-events-none"></div>
-            <div className="absolute inset-0 ada-noise opacity-20 z-0 pointer-events-none mix-blend-overlay"></div>
-
-            {/* Ambient Glows */}
-            <div className="absolute top-[-10%] left-[-10%] w-[500px] h-[500px] bg-cyan-500/20 rounded-full blur-[120px] pointer-events-none animate-pulse"></div>
-            <div className="absolute bottom-[-10%] right-[-10%] w-[500px] h-[500px] bg-purple-500/20 rounded-full blur-[120px] pointer-events-none animate-pulse"></div>
-
-            {/* Top Bar (Draggable) - GLASSMORPHISM */}
-            <div className="z-50 flex items-center justify-between p-3 border-b border-white/10 bg-white/5 backdrop-blur-xl select-none sticky top-0 shadow-[0_4px_30px_rgba(0,0,0,0.1)]" style={{ WebkitAppRegion: 'drag' }}>
-                <div className="flex items-center gap-4 pl-2">
-                    <h1 className="text-xl font-bold tracking-[0.2em] text-transparent bg-clip-text bg-gradient-to-r from-cyan-300 to-purple-300 drop-shadow-[0_0_10px_rgba(34,211,238,0.5)]">
-                        A.P.A
-                    </h1>
-                    <div className="text-[10px] text-cyan-300/70 border border-white/10 px-1.5 rounded-lg bg-white/5 backdrop-blur-sm">
-                        V2.0.0
+            <div className="h-screen w-screen overflow-hidden app-bg text-slate-200 font-mono select-none flex flex-col">
+                {/* ---------- top bar ---------- */}
+                <header className="h-12 shrink-0 flex items-center gap-4 px-4 border-b border-white/5 bg-black/30 backdrop-blur-md" style={{ WebkitAppRegion: 'drag' }}>
+                    <span className="text-base font-bold tracking-[0.35em] bg-gradient-to-r from-cyan-200 to-fuchsia-200 bg-clip-text text-transparent">A.P.A</span>
+                    <span className="text-[9px] px-1.5 py-0.5 rounded border border-white/10 text-slate-500">V2.1</span>
+                    <div className="flex gap-2 ml-2">
+                        <StatusChip on={socketConnected} label={socketConnected ? 'CORE' : 'CORE OFFLINE'} />
+                        <StatusChip on={isApaReady} warn={socketConnected && !isApaReady} label={isApaReady ? (isMuted ? 'VOICE · MUTED' : 'VOICE') : 'VOICE OFF'} />
+                        {focus.active && <StatusChip on={!focus.paused} warn={focus.paused} label={focus.paused ? 'FOCUS · PAUSED' : 'FOCUS'} />}
+                        {escalationCount > 0 && <StatusChip warn label={`${escalationCount} ESCALATED`} />}
                     </div>
-                    
-
-                </div>
-
-                {/* Top Visualizer (User Mic) */}
-                <div className="flex-1 flex justify-center mx-4">
-                    <TopAudioBar audioData={micAudioData} escalationCount={escalationCount} />
-                </div>
-
-                <div className="flex items-center gap-2 pr-2" style={{ WebkitAppRegion: 'no-drag' }}>
-                    {/* Live Clock */}
-                    <div className="flex items-center gap-1.5 text-[11px] text-cyan-200/70 font-mono px-2">
-                        <Clock size={12} className="text-cyan-400/50" />
-                        <span>{new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>
+                    <div className="flex-1" />
+                    <span className="text-[11px] text-slate-400 tabular-nums">{clock.toLocaleTimeString()}</span>
+                    <div className="flex gap-1" style={{ WebkitAppRegion: 'no-drag' }}>
+                        <button aria-label="Minimise" title="Minimise" onClick={() => ipcRenderer?.send('window-minimize')} className="p-1.5 rounded hover:bg-white/10 text-slate-300"><Minus size={16} /></button>
+                        <button aria-label="Maximise" title="Maximise" onClick={() => ipcRenderer?.send('window-maximize')} className="p-1.5 rounded hover:bg-white/10 text-slate-300"><Maximize size={14} /></button>
+                        <button aria-label="Close" title="Close" onClick={handleClose} className="p-1.5 rounded hover:bg-rose-500/20 text-rose-300"><X size={16} /></button>
                     </div>
-                    <button onClick={handleMinimize} className="p-1.5 hover:bg-white/10 rounded-lg text-cyan-300 transition-colors">
-                        <Minus size={18} />
-                    </button>
-                    <button onClick={handleMaximize} className="p-1.5 hover:bg-white/10 rounded-lg text-cyan-300 transition-colors">
-                        <div className="w-[14px] h-[14px] border-2 border-current rounded-[2px]" />
-                    </button>
-                    <button onClick={handleCloseRequest} className="p-1.5 hover:bg-rose-500/20 rounded-lg text-rose-300 transition-colors">
-                        <X size={18} />
-                    </button>
+                </header>
+
+                <div className="flex-1 min-h-0 flex relative">
+                    {/* ---------- left: conversation ---------- */}
+                    <motion.aside animate={{ width: mainSummon ? 0 : 340, opacity: mainSummon ? 0 : 1, x: mainSummon ? -60 : 0 }} transition={{ type: 'spring', stiffness: 90, damping: 20 }} className="shrink-0 flex flex-col border-r border-white/5 bg-black/20 backdrop-blur-sm overflow-hidden"><div className="w-[340px] h-full flex flex-col">
+                        <div className="px-4 py-3 text-[10px] tracking-[0.3em] text-slate-500 border-b border-white/5">CONVERSATION</div>
+                        <div className="flex-1 overflow-y-auto custom-scrollbar px-4 py-3 space-y-3">
+                            {messages.length === 0 && (
+                                <div className="text-xs text-slate-500 leading-relaxed mt-6">
+                                    <div className="text-slate-300 mb-2">Try saying or typing:</div>
+                                    {['“Check my emails”', '“Scan flights over Colombo”', '“Any earthquakes today?”', '“Where is the ISS right now?”', '“Open my assingment folder on the Desktop”', '“Point at the Start button”', '“Start Bluey focus mode: writing my report for 45 minutes”'].map((s) => (
+                                        <button key={s} onClick={() => sendText(s.replace(/[“”]/g, ''))} className="block w-full text-left px-3 py-2 mb-1.5 rounded-lg border border-white/5 hover:border-cyan-300/30 hover:text-cyan-100 transition-colors">{s}</button>
+                                    ))}
+                                </div>
+                            )}
+                            {messages.map((m, i) => (
+                                <div key={i} className={m.sender === 'User' ? 'text-right' : ''}>
+                                    <div className={`text-[9px] tracking-[0.2em] mb-0.5 ${m.sender === 'ADA' ? 'text-cyan-400/70' : m.sender === 'User' ? 'text-fuchsia-300/70' : 'text-slate-600'}`}>
+                                        {m.sender === 'ADA' ? 'A.P.A' : m.sender === 'User' ? 'YOU' : 'SYSTEM'} · {m.time}
+                                    </div>
+                                    <div className={`inline-block text-[13px] leading-relaxed px-3 py-2 rounded-xl max-w-full text-left font-sans
+                                        ${m.sender === 'ADA' ? 'bg-cyan-400/[0.06] border border-cyan-300/10 text-slate-100' : m.sender === 'User' ? 'bg-fuchsia-400/[0.08] border border-fuchsia-300/10 text-slate-100' : 'text-slate-500 text-xs'}`}>
+                                        {m.text}
+                                    </div>
+                                </div>
+                            ))}
+                            <div ref={chatEnd} />
+                        </div>
+                        <div className="p-3 border-t border-white/5 flex gap-2">
+                            <input value={inputValue} onChange={(e) => setInputValue(e.target.value)}
+                                onKeyDown={(e) => { if (e.key === 'Enter') { sendText(inputValue); setInputValue(''); } }}
+                                placeholder={isApaReady ? 'Type a command…' : 'Start voice to chat…'} disabled={!isApaReady}
+                                className="holo-input flex-1 disabled:opacity-50" />
+                            <button aria-label="Send" title="Send" onClick={() => { sendText(inputValue); setInputValue(''); }} disabled={!isApaReady || !inputValue.trim()}
+                                className="px-3 rounded-lg border border-cyan-300/30 text-cyan-200 hover:bg-cyan-400/10 disabled:opacity-30"><Send size={15} /></button>
+                        </div>
+                    </div></motion.aside>
+
+                    {/* ---------- centre: the orb ---------- */}
+                    <main className="flex-1 min-w-0 relative flex flex-col items-center">
+                        <ScreenFrame state={orbState} />
+                        <motion.div className="flex-1 w-full relative" animate={{ x: mainSummon ? -window.innerWidth * 0.28 : 0 }} transition={{ type: 'spring', stiffness: 60, damping: 16 }}>
+                            <motion.div className="absolute inset-0 flex items-center justify-center pointer-events-none"
+                                animate={{ x: mouse.x * 26, y: mouse.y * 18, scale: mainSummon ? 0.72 : 1 }} transition={{ type: 'spring', stiffness: 50, damping: 18 }}>
+                                <OrbHud state={orbState} size={Math.round(window.innerHeight * 0.74)} />
+                            </motion.div>
+                            <motion.div className="absolute inset-0" animate={{ x: mouse.x * -10, y: mouse.y * -8 }} transition={{ type: 'spring', stiffness: 50, damping: 18 }}>
+                                <Orb3D state={orbState} level={orbLevel} compact={mainSummon} className="absolute inset-0 orb-fx" />
+                            </motion.div>
+                            <AnimatePresence><FocusHUD focus={focus} onControl={focusControl} /></AnimatePresence>
+                        </motion.div>
+                        <motion.div className="shrink-0 text-center -mt-6 mb-3 px-6 z-10" animate={{ x: mainSummon ? -window.innerWidth * 0.28 : 0, opacity: mainSummon ? 0.85 : 1 }} transition={{ type: 'spring', stiffness: 60, damping: 16 }}>
+                            <div className={`text-xs tracking-[0.5em] ${orbState === 'offline' ? 'text-rose-300' : orbState === 'alert' ? 'text-amber-300' : 'text-cyan-200'}`}>{STATE_TEXT[orbState]}</div>
+                            <div className="h-10 mt-2 text-sm text-slate-300 font-sans max-w-[640px] mx-auto line-clamp-2">
+                                {!socketConnected ? 'Start the Python backend (backend/server.py) to bring A.P.A online.' : caption}
+                            </div>
+                        </motion.div>
+                        <motion.div className="absolute left-12 bottom-24 z-[45]" initial={{ opacity: 0, scale: 0.4 }}
+                            animate={{ opacity: booting ? 0 : 1, scale: booting ? 0.4 : 1, transition: { delay: booting ? 0 : 0.6, type: 'spring', stiffness: 160, damping: 12 } }}>
+                            <Bluey size={110} say={blueySay}
+                                mood={nudge && Date.now() - nudge.id < 12000 ? 'worried' : focus.active && !focus.paused ? 'focus' : !socketConnected || !isConnected ? 'sleepy' : 'happy'}
+                                onClick={() => (focus.active ? blueyTalk(`${Math.ceil((focus.remaining || 0) / 60)} min left on "${focus.task}". You got this!`, 5000) : setShowFocus(true))} />
+                        </motion.div>
+                        <nav className="shrink-0 mb-5 z-10 flex gap-2 px-4 py-3 rounded-3xl border border-white/10 bg-black/40 backdrop-blur-md">
+                            <DockButton icon={Power} label={isConnected ? 'Voice on' : 'Voice off'} onClick={togglePower} active={isConnected} tone="emerald" disabled={!socketConnected} />
+                            <DockButton icon={isMuted ? MicOff : Mic} label={isMuted ? 'Muted' : 'Mic'} onClick={toggleMute} active={isConnected && !isMuted} tone={isMuted ? 'rose' : 'cyan'} disabled={!isConnected || !socketConnected} />
+                            <DockButton icon={Target} label="Focus" onClick={() => (focus.active ? setRightTab('focus') : setShowFocus(true))} active={focus.active} tone="emerald" disabled={!socketConnected} />
+                            <DockButton icon={Mail} label="Inbox" onClick={openInbox} active={showInbox} tone="fuchsia" disabled={!socketConnected} />
+                            <DockButton icon={Sparkles} label={blueyDesktop ? 'Bluey on' : 'Bluey off'} active={blueyDesktop} tone="fuchsia" disabled={!socketConnected}
+                                onClick={() => { socket.emit('bluey', { on: !blueyDesktop }); setBlueyDesktop(!blueyDesktop); }} />
+                            <DockButton icon={Settings} label="Settings" onClick={() => setShowSettings(true)} active={showSettings} />
+                        </nav>
+                    </main>
+
+                    {/* ---------- right: activity ---------- */}
+                    <motion.aside animate={{ width: mainSummon ? 0 : 320, opacity: mainSummon ? 0 : 1, x: mainSummon ? 60 : 0 }} transition={{ type: 'spring', stiffness: 90, damping: 20 }} className="shrink-0 flex flex-col border-l border-white/5 bg-black/20 backdrop-blur-sm overflow-hidden"><div className="w-[320px] h-full flex flex-col">
+                        <div className="flex border-b border-white/5">
+                            {[['log', 'MISSION LOG', Activity], ['focus', 'FOCUS', Target]].map(([k, l, I]) => (
+                                <button key={k} onClick={() => setRightTab(k)}
+                                    className={`flex-1 py-3 text-[10px] tracking-[0.25em] flex items-center justify-center gap-1.5 ${rightTab === k ? 'text-cyan-200 border-b border-cyan-300' : 'text-slate-500 hover:text-slate-300'}`}>
+                                    <I size={12} /> {l}
+                                </button>
+                            ))}
+                        </div>
+                        <div className="flex-1 overflow-y-auto custom-scrollbar p-4">
+                            {rightTab === 'log' ? (
+                                tasks.length === 0 ? <div className="text-xs text-slate-500">Every task A.P.A runs shows up here, live.</div> : (
+                                    <div className="space-y-2">
+                                        {[...tasks].reverse().map((t) => {
+                                            const meta = toolMeta(t.tool);
+                                            const I = meta.icon;
+                                            return (
+                                                <motion.div key={t.id} initial={{ opacity: 0, x: 20 }} animate={{ opacity: 1, x: 0 }}
+                                                    className="rounded-lg border border-white/5 bg-white/[0.02] px-3 py-2">
+                                                    <div className="flex items-center gap-2 text-xs">
+                                                        <I size={13} className="text-cyan-300/80" />
+                                                        <span className="flex-1 capitalize text-slate-200 truncate">{meta.label}</span>
+                                                        {t.state === 'running' && <Loader2 size={13} className="animate-spin text-amber-300" />}
+                                                        {t.state === 'done' && <Check size={13} className="text-emerald-400" />}
+                                                        {t.state === 'denied' && <Ban size={13} className="text-rose-400" />}
+                                                    </div>
+                                                    <div className="text-[10px] text-slate-500 mt-0.5 truncate">
+                                                        {new Date(t.started).toLocaleTimeString()} · {t.detail || Object.values(t.args || {}).join(' · ') || t.tool}
+                                                    </div>
+                                                </motion.div>
+                                            );
+                                        })}
+                                    </div>
+                                )
+                            ) : (
+                                <div className="space-y-5">
+                                    {focus.active ? (
+                                        <div>
+                                            <div className="text-[10px] tracking-[0.25em] text-emerald-300 mb-2">CURRENT · {focus.task}</div>
+                                            <FocusTimeline checks={focus.checks} total={focus.planned_minutes * 60} elapsed={focus.elapsed} />
+                                            <div className="flex gap-3 mt-2 text-[10px] text-slate-500">
+                                                <span><span className="text-emerald-400">■</span> on</span><span><span className="text-rose-400">■</span> off</span><span><span className="text-slate-500">■</span> unsure</span>
+                                            </div>
+                                        </div>
+                                    ) : (
+                                        <button onClick={() => setShowFocus(true)} disabled={!socketConnected} className="holo-btn w-full justify-center disabled:opacity-40"><Target size={14} /> Start a focus session</button>
+                                    )}
+                                    <div>
+                                        <div className="text-[10px] tracking-[0.25em] text-slate-500 mb-2">HISTORY</div>
+                                        <FocusHistory sessions={focusHistory} />
+                                    </div>
+                                </div>
+                            )}
+                        </div>
+                    </div></motion.aside>
+
+                    {/* ---------- cinematic stage ---------- */}
+                    <Stage widgets={widgets} computer={computer} onDismiss={dismissWidget}
+                        onOpenInbox={openInbox} onAsk={sendText} onStop={() => socket.emit('emergency_stop')} onResume={() => socket.emit('computer_resume')} />
                 </div>
-            </div>
 
-            {/* Main Content */}
-            <div className="flex-1 relative z-10 flex flex-col items-center">
-                {/* Central Visualizer (AI Audio) - GLASSMORPHISM */}
-                <div
-                    id="visualizer"
-                    className={`absolute flex items-center justify-center transition-[left,top,width,height] duration-500 ease-out
-                        backdrop-blur-2xl bg-white/5 border border-white/20 shadow-[0_8px_32px_0_rgba(31,38,135,0.37)] overflow-visible
-                        ${isModularMode ? (activeDragElement === 'visualizer' ? 'ring-2 ring-cyan-400 bg-cyan-500/10' : 'ring-1 ring-white/30 bg-white/10') + ' rounded-3xl pointer-events-auto' : 'rounded-3xl pointer-events-none'}
-                    `}
-                    style={{
-                        left: elementPositions.visualizer.x,
-                        top: elementPositions.visualizer.y,
-                        transform: 'translate(-50%, -50%)',
-                        width: elementSizes.visualizer.w,
-                        height: elementSizes.visualizer.h
-                    }}
-                    onMouseDown={(e) => handleMouseDown(e, 'visualizer')}
-                >
-                    <div className="absolute inset-0 ada-noise opacity-10 pointer-events-none mix-blend-overlay z-10"></div>
-                    <div className="relative z-20">
-                        <Visualizer
-                            audioData={aiAudioData}
-                            isListening={isConnected && !isMuted}
-                            intensity={audioAmp}
-                            adaState={adaState}
-                            width={elementSizes.visualizer.w}
-                            height={elementSizes.visualizer.h}
-                        />
-                    </div>
-                    {isModularMode && <div className={`absolute top-2 right-2 text-xs font-bold tracking-widest z-20 ${activeDragElement === 'visualizer' ? 'text-green-500' : 'text-yellow-500/50'}`}>VISUALIZER</div>}
-                </div>
+                <div className="fixed inset-0 pointer-events-none z-[150] fx-scanlines" />
+                {booting && <Boot coreOnline={socketConnected} onDone={() => setBooting(false)} />}
+                <AnimatePresence>{confirmQueue[0] && <ConfirmCard request={confirmQueue[0]} onResolve={resolveConfirm} />}</AnimatePresence>
+                <AnimatePresence>
+                    {showFocus && <FocusLauncher open focus={focus} onClose={() => setShowFocus(false)}
+                        onDevMode={(on) => socket.emit('focus_dev_mode', { on })}
+                        onTestNudge={() => socket.emit('focus_test_nudge')}
+                        onStart={(task, minutes) => { socket.emit('focus_start', { task, minutes }); setShowFocus(false); setRightTab('focus'); }} />}
+                </AnimatePresence>
 
-
-
-                {/* Settings Modal - Moved outside Video so it shows independently */}
                 {showSettings && (
-                    <SettingsWindow
-                        socket={socket}
-                        micDevices={micDevices}
-                        speakerDevices={speakerDevices}
-                        selectedMicId={selectedMicId}
-                        setSelectedMicId={setSelectedMicId}
-                        selectedSpeakerId={selectedSpeakerId}
-                        setSelectedSpeakerId={setSelectedSpeakerId}
-                        handleFileUpload={handleFileUpload}
-                        onClose={() => setShowSettings(false)}
-                    />
+                    <SettingsWindow socket={socket} micDevices={micDevices} speakerDevices={speakerDevices}
+                        selectedMicId={selectedMicId} setSelectedMicId={setSelectedMicId}
+                        selectedSpeakerId={selectedSpeakerId} setSelectedSpeakerId={setSelectedSpeakerId}
+                        handleFileUpload={() => {}} onClose={() => setShowSettings(false)} />
                 )}
-
-
-
-
-
-
-
-                {/* Email Window Overlay */}
-                {showEmailWindow && (
-                    <div
-                        id="email"
-                        className={`absolute flex flex-col transition-[left,top,width,height] duration-500 ease-out
-                        backdrop-blur-2xl bg-white/5 border border-white/20 shadow-[0_8px_32px_0_rgba(31,38,135,0.37)] overflow-hidden rounded-3xl
-                        ${activeDragElement === 'email' ? 'ring-2 ring-cyan-400 bg-cyan-500/10' : ''}
-                    `}
-                        style={{
-                            left: elementPositions.email?.x ?? window.innerWidth / 2,
-                            top: elementPositions.email?.y ?? window.innerHeight / 2,
-                            transform: 'translate(-50%, -50%)',
-                            width: `${elementSizes.email?.w || 550}px`,
-                            height: `${elementSizes.email?.h || 380}px`,
-                            pointerEvents: 'auto',
-                            zIndex: getZIndex('email')
-                        }}
-                        onMouseDown={(e) => handleMouseDown(e, 'email')}
-                    >
-                        <div className="relative z-20 w-full h-full">
-                            <EmailWindow
-                                socket={socket}
-                                onClose={() => setShowEmailWindow(false)}
-                                onCompose={() => setShowCompose(true)}
-                            />
+                {showInbox && (
+                    <div className="fixed inset-0 z-[80] flex items-center justify-center bg-black/60" onClick={() => setShowInbox(false)}>
+                        <div onClick={(e) => e.stopPropagation()} className="w-[620px] h-[520px] relative">
+                            <EmailWindow socket={socket} onClose={() => setShowInbox(false)} onCompose={() => setShowCompose(true)} />
                         </div>
                     </div>
                 )}
                 {showCompose && (
-                    <div
-                        className="absolute"
-                        style={{
-                            left: window.innerWidth / 2,
-                            top: window.innerHeight / 2,
-                            transform: 'translate(-50%, -50%)',
-                            width: '480px',
-                            height: '520px',
-                            pointerEvents: 'auto',
-                            zIndex: 100
-                        }}
-                    >
-                        <ComposeWindow
-                            socket={socket}
-                            onClose={() => setShowCompose(false)}
-                        />
+                    <div className="fixed inset-0 z-[95] flex items-center justify-center bg-black/60">
+                        <ComposeWindow socket={socket} onClose={() => setShowCompose(false)} />
                     </div>
                 )}
-
-                {/* Chat Module */}
-                <ChatModule
-                    messages={messages}
-                    inputValue={inputValue}
-                    setInputValue={setInputValue}
-                    handleSend={handleSend}
-                    isModularMode={isModularMode}
-                    activeDragElement={activeDragElement}
-                    position={elementPositions.chat}
-                    width={elementSizes.chat.w}
-                    height={elementSizes.chat.h}
-                    onMouseDown={(e) => handleMouseDown(e, 'chat')}
-                />
-
-                {/* Widget Cards */}
-                <WidgetContainer
-                    widgets={widgets}
-                    onDismiss={dismissWidget}
-                    onSendEmail={handleWidgetSendEmail}
-                    onAsk={handleWidgetAsk}
-                />
-
-                {/* Computer-control takeover cinema */}
-                <ControlOverlay widgets={widgets} socket={socket} />
-
-                {/* Footer Controls / Tools Module */}
-                <div className="mt-auto flex justify-center z-50">
-                    <ToolsModule
-                        isConnected={isConnected}
-                        isMuted={isMuted}
-                        showSettings={showSettings}
-                        onTogglePower={togglePower}
-                        onToggleMute={toggleMute}
-                        onToggleSettings={() => setShowSettings(!showSettings)}
-                        onToggleEmail={toggleEmailWindow}
-                        showEmailWindow={showEmailWindow}
-                    />
-                </div>
-
             </div>
-        </div>
         </ErrorBoundary>
     );
 }
