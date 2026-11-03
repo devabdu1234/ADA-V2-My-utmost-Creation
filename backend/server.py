@@ -26,7 +26,13 @@ from email_agent import EmailAgent
 from sheets_logger import SheetsLogger
 from weather_service import city_weather
 
-sio = socketio.AsyncServer(async_mode='asgi', cors_allowed_origins='*')
+# Only the ADA window may talk to this backend. '*' let ANY website open in a browser
+# connect to 127.0.0.1:8000, read settings and drive the mouse/keyboard tools.
+ALLOWED_ORIGINS = [
+    "http://localhost:5173", "http://127.0.0.1:5173",   # Vite dev server
+    "file://",                                           # packaged Electron build
+]
+sio = socketio.AsyncServer(async_mode='asgi', cors_allowed_origins=ALLOWED_ORIGINS)
 app = FastAPI()
 app_socketio = socketio.ASGIApp(sio, app)
 
@@ -48,7 +54,7 @@ signal.signal(signal.SIGTERM, signal_handler)
 
 audio_loop = None
 loop_task = None
-SETTINGS_FILE = "settings.json"
+SETTINGS_FILE = os.path.join(_BACKEND_DIR, "settings.json")  # not CWD-relative
 sheets_logger = SheetsLogger()
 
 DEFAULT_SETTINGS = {
@@ -77,7 +83,7 @@ def load_settings():
                         SETTINGS["tool_permissions"].update(v)
                     else:
                         SETTINGS[k] = v
-            print(f"Loaded settings: {SETTINGS}")
+            print("Loaded settings.")  # never print SETTINGS: it holds the email password
         except Exception as e:
             print(f"Error loading settings: {e}")
 
@@ -91,13 +97,135 @@ def save_settings():
 
 load_settings()
 
+
+def public_settings():
+    """Settings as sent to the UI: the email password never leaves the backend."""
+    out = json.loads(json.dumps(SETTINGS))
+    cfg = out.get("email_config", {})
+    cfg["password_saved"] = bool(cfg.get("password") or os.getenv("EMAIL_PASSWORD"))
+    cfg["password"] = ""
+    return out
+
+
+def email_credentials():
+    """settings.json first, then .env (same rule for voice, proactive and inbox panel)."""
+    cfg = SETTINGS.get("email_config", {})
+    return (cfg.get("email_address", "") or os.getenv("EMAIL_ADDRESS", ""),
+            cfg.get("password", "") or os.getenv("EMAIL_PASSWORD", ""))
+
+
+# ---------------------------------------------------------------- focus ----
+import time as _time
+from focus import FocusEngine, make_gemini_classifier
+
+connected_clients = set()
+
+
+def _focus_event(kind, data):
+    """FocusEngine -> UI (and voice for nudges)."""
+    asyncio.create_task(sio.emit(kind, data))
+    if kind == "focus_state":
+        _bluey_focus_watch(data)
+    if kind == "focus_state" and audio_loop is not None:
+        # Proactive email interruptions stay quiet while the user is focusing.
+        if data.get("active") and not data.get("paused"):
+            audio_loop.signals.busy_until = _time.time() + data.get("remaining", 0) / focus_engine.speed
+        else:
+            audio_loop.signals.busy_until = 0.0
+    if kind == "focus_nudge":
+        _bluey("say", text=data.get("text", ""), mood="worried", seconds=10)
+        asyncio.create_task(sio.emit('widget_update', {'type': 'focus_nudge', 'data': data}))
+        if audio_loop is not None:
+            asyncio.create_task(audio_loop.speak_nudge(data))
+
+
+import secrets as _secrets
+os.environ["APA_BLUEY_TOKEN"] = _secrets.token_hex(16)   # inherited by the Bluey process
+_caption_buf = {"text": "", "t": 0.0}
+
+
+def _bluey_forward_widget(data):
+    """Mirror A.P.A's work into Bluey's background HUD."""
+    if not SETTINGS.get("bluey_desktop", True):
+        return
+    t, d = data.get("type"), data.get("data") or {}
+    if t == "task":
+        args = d.get("args") or {}
+        arg = next(iter(args.values()), "") if args else ""
+        _bluey("task", id=d.get("id"), tool=d.get("tool"), state=d.get("state"), arg=str(arg)[:30])
+    elif t == "focus_nudge":
+        pass  # handled in _focus_event
+
+
+def _bluey_forward_caption(data):
+    if not SETTINGS.get("bluey_desktop", True) or data.get("sender") != "ADA":
+        return
+    import time as _t
+    _caption_buf["text"] += data.get("text", "")
+    if _t.time() - _caption_buf["t"] > 0.6:          # throttle file writes
+        _bluey("caption", text=_caption_buf["text"])
+        _caption_buf["text"], _caption_buf["t"] = "", _t.time()
+
+
+def _bluey(action, **kw):
+    """Tell the desktop Bluey buddy something (starts it if needed). Never raises."""
+    try:
+        import bluey_buddy
+        if bluey_buddy.ensure_running():
+            bluey_buddy.send_command(action, **kw)
+    except Exception as e:
+        print(f"[BLUEY] {e}")
+
+
+_last_focus_active = {"v": False}
+
+
+def _bluey_focus_watch(data):
+    active = bool(data.get("active"))
+    if active and not _last_focus_active["v"]:
+        _bluey("say", text=f"Focus mode on: {data.get('task', '')}. I've got your back!", mood="focus", seconds=6)
+    elif not active and _last_focus_active["v"]:
+        _bluey("say", text="Session done. Nice work!", mood="happy", seconds=6)
+    _last_focus_active["v"] = active
+
+
+focus_engine = FocusEngine(classify=make_gemini_classifier(ada.client), on_event=_focus_event)
+
 @app.on_event("startup")
 async def startup_event():
     print("[SERVER] A.P.A Email Assistant Backend Starting...")
+    asyncio.create_task(focus_engine.run_forever())
+    if SETTINGS.get("bluey_desktop", True):
+        try:
+            import bluey_buddy
+            await asyncio.to_thread(bluey_buddy.restart)   # fresh Bluey with this run's token
+        except Exception as e:
+            print(f"[BLUEY] start failed: {e}")
 
 @app.get("/status")
 async def status():
     return {"status": "running", "service": "A.P.A Email Assistant Backend"}
+
+from fastapi import Request
+from fastapi.responses import JSONResponse
+
+
+@app.post("/bluey/ask")
+async def bluey_ask(request: Request):
+    """Bluey's text box -> A.P.A. Needs this run's secret token in a custom header,
+    so no web page (CORS preflight) and no stale Bluey can send commands."""
+    if request.headers.get("x-bluey-token") != os.environ.get("APA_BLUEY_TOKEN"):
+        return JSONResponse({"ok": False, "error": "Not authorised."}, status_code=403)
+    body = await request.json()
+    text = str(body.get("text", "")).strip()[:500]
+    if not text:
+        return {"ok": False, "error": "Empty command."}
+    if not (audio_loop and audio_loop.session):
+        return {"ok": False, "error": "A.P.A's voice is off. Open A.P.A and press Voice on."}
+    await sio.emit('transcription', {"sender": "User", "text": text})
+    await audio_loop.send_text(text)
+    return {"ok": True}
+
 
 @app.get("/proactive/stats")
 async def proactive_stats():
@@ -119,11 +247,16 @@ async def proactive_stats():
 @sio.event
 async def connect(sid, environ):
     print(f"Client connected: {sid}")
+    connected_clients.add(sid)
+    await sio.emit('focus_state', focus_engine.state(), room=sid)
     await sio.emit('status', {'msg': 'Connected to A.P.A Backend'}, room=sid)
 
 @sio.event
 async def disconnect(sid):
     print(f"Client disconnected: {sid}")
+    connected_clients.discard(sid)
+    if not connected_clients and focus_engine.session:
+        focus_engine.end("disconnected")  # like Bluey: never keep watching with no UI open
 
 @sio.event
 async def start_audio(sid, data=None):
@@ -157,6 +290,7 @@ async def start_audio(sid, data=None):
 
     def on_transcription(data):
         asyncio.create_task(sio.emit('transcription', data))
+        _bluey_forward_caption(data)
 
     def on_tool_confirmation(data):
         print(f"Requesting confirmation for tool: {data.get('tool')}")
@@ -168,6 +302,7 @@ async def start_audio(sid, data=None):
 
     def on_widget_update(data):
         asyncio.create_task(sio.emit('widget_update', data))
+        _bluey_forward_widget(data)
 
     try:
         print(f"Initializing AudioLoop with device_index={device_index}")
@@ -185,6 +320,7 @@ async def start_audio(sid, data=None):
         print("AudioLoop initialized successfully.")
 
         audio_loop.update_permissions(SETTINGS["tool_permissions"])
+        audio_loop.focus = focus_engine
 
         if data and data.get('muted', False):
             print("Starting with Audio Paused")
@@ -209,8 +345,7 @@ async def start_audio(sid, data=None):
         email_config = SETTINGS.get("email_config", {})
         if email_config and audio_loop.email_agent:
             print(f"[SERVER] Loading email configuration...")
-            audio_loop.email_agent.email_address = email_config.get("email_address", "")
-            audio_loop.email_agent.password = email_config.get("password", "")
+            audio_loop.email_agent.email_address, audio_loop.email_agent.password = email_credentials()
             audio_loop.email_agent.imap_server = email_config.get("imap_server", "imap.gmail.com")
             audio_loop.email_agent.smtp_server = email_config.get("smtp_server", "smtp.gmail.com")
 
@@ -295,8 +430,8 @@ async def fetch_today_emails(sid, data=None):
     print("[SERVER] Fetching today's emails...")
     email_config = SETTINGS.get("email_config", {})
     agent = EmailAgent(
-        email_address=email_config.get("email_address", ""),
-        password=email_config.get("password", "")
+        email_address=email_credentials()[0],
+        password=email_credentials()[1]
     )
     try:
         result = await agent.fetch_today_emails(limit=20)
@@ -319,8 +454,8 @@ async def summon_demo(sid, data=None):
     print("[SERVER] Summon demo requested...")
     email_config = SETTINGS.get("email_config", {})
     agent = EmailAgent(
-        email_address=email_config.get("email_address", ""),
-        password=email_config.get("password", "")
+        email_address=email_credentials()[0],
+        password=email_credentials()[1]
     )
     try:
         result = await agent.read_emails(limit=8)
@@ -433,8 +568,8 @@ async def new_email(sid, data):
         return
     email_config = SETTINGS.get("email_config", {})
     agent = EmailAgent(
-        email_address=email_config.get("email_address", ""),
-        password=email_config.get("password", "")
+        email_address=email_credentials()[0],
+        password=email_credentials()[1]
     )
     try:
         result = await agent.send_email(to, subject, body, priority=priority)
@@ -468,6 +603,38 @@ async def emergency_stop(sid, data=None):
         await sio.emit('error', {'msg': f'Emergency stop failed: {e}'})
 
 @sio.event
+async def bluey(sid, data=None):
+    """Show / hide the desktop Bluey buddy, or make it say something."""
+    data = data or {}
+    if data.get("on") is False:
+        SETTINGS["bluey_desktop"] = False
+        _bluey_quit()
+    elif data.get("on") is True:
+        SETTINGS["bluey_desktop"] = True
+        _bluey("say", text="I'm back!", mood="happy", seconds=4)
+    elif data.get("say"):
+        _bluey("say", text=data["say"], seconds=6)
+    save_settings()
+    await sio.emit('bluey_state', {'on': SETTINGS.get("bluey_desktop", True)}, room=sid)
+
+
+def _bluey_quit():
+    try:
+        import bluey_buddy
+        bluey_buddy.send_command("quit")
+    except Exception:
+        pass
+
+@sio.event
+async def computer_resume(sid, data=None):
+    """Lift the emergency stop so A.P.A may use mouse/keyboard again."""
+    from computer_bridge import resume_control
+    resume_control()
+    await sio.emit('widget_update', {'type': 'computer_control', 'data': {
+        'state': 'done', 'tool': 'computer_resume', 'detail': 'control re-enabled'}})
+    await sio.emit('status', {'msg': 'Computer control resumed'})
+
+@sio.event
 async def update_settings(sid, data):
     global SETTINGS
     if data:
@@ -476,15 +643,55 @@ async def update_settings(sid, data):
                 SETTINGS["tool_permissions"].update(v)
                 if audio_loop:
                     audio_loop.update_permissions(v)
+            elif k == "email_config" and isinstance(v, dict):
+                v = dict(v)
+                v.pop("password_saved", None)
+                if not v.get("password"):          # blank = keep the saved password
+                    v["password"] = SETTINGS.get("email_config", {}).get("password", "")
+                SETTINGS["email_config"] = {**SETTINGS.get("email_config", {}), **v}
             else:
                 SETTINGS[k] = v
         save_settings()
-        print(f"Settings updated: {SETTINGS}")
-        await sio.emit('settings_updated', {'settings': SETTINGS})
+        print("Settings updated.")
+        await sio.emit('settings_updated', {'settings': public_settings()})
 
 @sio.event
 async def get_settings(sid, data=None):
-    await sio.emit('settings_loaded', {'settings': SETTINGS})
+    await sio.emit('settings_loaded', {'settings': public_settings()})
+
+
+# ------------------------------------------------------- focus sessions ----
+@sio.event
+async def focus_start(sid, data=None):
+    data = data or {}
+    focus_engine.start(data.get('task', ''), data.get('minutes', 30), data.get('dev_mode'))
+
+@sio.event
+async def focus_control(sid, data=None):
+    action = (data or {}).get('action')
+    if action == 'pause':
+        focus_engine.pause()
+    elif action == 'resume':
+        focus_engine.resume()
+    elif action == 'end':
+        focus_engine.end('ended')
+    await sio.emit('focus_state', focus_engine.state(), room=sid)
+
+@sio.event
+async def focus_dev_mode(sid, data=None):
+    focus_engine.set_dev_mode(bool((data or {}).get('on')))
+
+@sio.event
+async def focus_history(sid, data=None):
+    await sio.emit('focus_history', {'sessions': focus_engine.history()[-20:]}, room=sid)
+
+@sio.event
+async def focus_test_nudge(sid, data=None):
+    """Checks the nudge path (widget + chirp + voice) without taking a screenshot."""
+    st = focus_engine.state()
+    _focus_event('focus_nudge', {'t': st.get('elapsed', 0), 'task': st.get('task', 'your task'),
+                                 'app': 'test', 'reason': 'test nudge', 'point_text': '',
+                                 'text': 'Test nudge: this is how I will bring you back on task.'})
 
 if __name__ == "__main__":
     uvicorn.run(

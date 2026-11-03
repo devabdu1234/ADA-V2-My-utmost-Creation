@@ -70,13 +70,17 @@ function startPythonBackend() {
     const scriptPath = path.join(__dirname, '../backend/server.py');
     console.log(`Starting Python backend: ${scriptPath}`);
 
-    // Force Python 3.12 path to avoid version conflicts
-    const pythonPath = process.platform === 'win32' 
-        ? 'C:\\Users\\WinDows\\AppData\\Local\\Programs\\Python\\Python312\\python.exe' 
-        : 'python';
+    // Portable: the APA_PYTHON environment variable wins, else the python on PATH.
+    // (The old hardcoded C:\\Users\\WinDows\\... path only existed on one PC.)
+    const pythonPath = process.env.APA_PYTHON || (process.platform === 'win32' ? 'python' : 'python3');
 
     pythonProcess = spawn(pythonPath, [scriptPath], {
         cwd: path.join(__dirname, '../backend'),
+    });
+
+    pythonProcess.on('error', (err) => {
+        console.error(`[Python] Could not start "${pythonPath}": ${err.message}. ` +
+            'Install Python 3.12 and add it to PATH, or set APA_PYTHON to python.exe.');
     });
 
     pythonProcess.stdout.on('data', (data) => {
