@@ -208,7 +208,7 @@ function CameraRig({ distRef }) {
  *  state  – offline | idle | listening | thinking | speaking | summoning | focus | alert
  *  level  – 0..1 voice energy (AI speech or mic), drives the surface ripple
  */
-export default function Orb3D({ state = 'idle', level = 0, compact = false, className = '' }) {
+export default function Orb3D({ state = 'idle', level = 0, compact = false, className = '', style }) {
     const profileRef = useRef(PROFILES.idle);
     const levelRef = useRef(0);
     profileRef.current = PROFILES[state] || PROFILES.idle;
@@ -216,7 +216,7 @@ export default function Orb3D({ state = 'idle', level = 0, compact = false, clas
     const distRef = useRef(5.2);
     distRef.current = compact ? 6.8 : 5.2;
     return (
-        <div className={className}>
+        <div className={className} style={style}>
             <Canvas camera={{ position: [0, 0, 5.2], fov: 45 }} dpr={[1, 2]} gl={{ antialias: true, alpha: true }}>
                 <CameraRig distRef={distRef} />
                 <Particles profileRef={profileRef} levelRef={levelRef} />

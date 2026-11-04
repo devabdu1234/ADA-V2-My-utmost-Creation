@@ -67,7 +67,8 @@ export function Beams({ rects, accent = '#22d3ee' }) {
     const o = orbAnchor();
     const list = Object.values(rects).filter(Boolean);
     return (
-        <svg className="fixed inset-0 pointer-events-none z-[39]" width={size.w} height={size.h}>
+        <motion.svg className="fixed inset-0 pointer-events-none z-[39]" width={size.w} height={size.h}
+            exit={{ opacity: 0, transition: { duration: 0.2 } }}>
             <defs>
                 <linearGradient id="beam" x1="0" x2="1">
                     <stop offset="0" stopColor={accent} stopOpacity="0.9" />
@@ -88,6 +89,6 @@ export function Beams({ rects, accent = '#22d3ee' }) {
                     </g>
                 );
             })}
-        </svg>
+        </motion.svg>
     );
 }

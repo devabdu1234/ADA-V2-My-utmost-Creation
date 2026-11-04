@@ -297,6 +297,14 @@ function App() {
     /* ------------------------------------------------------- state ---- */
     const audioAmp = aiAudioData.reduce((a, b) => a + b, 0) / Math.max(1, aiAudioData.length) / 255;
     const mainSummon = widgets.some((w) => ['weather', 'map', 'email_summary', 'computer', 'gods_eye'].includes(w.type));
+    // Layout follows the summon with a lag on recall: panels fly back into the docked orb first,
+    // then the orb glides home and the sidebars reopen (otherwise panels chase an orb that has left).
+    const [summonLayout, setSummonLayout] = useState(false);
+    useEffect(() => {
+        if (mainSummon) { setSummonLayout(true); return undefined; }
+        const t = setTimeout(() => setSummonLayout(false), 520);
+        return () => clearTimeout(t);
+    }, [mainSummon]);
     const running = tasks.some((t) => t.state === 'running');
     const lastMsg = messages[messages.length - 1];
 
@@ -344,7 +352,7 @@ function App() {
 
                 <div className="flex-1 min-h-0 flex relative">
                     {/* ---------- left: conversation ---------- */}
-                    <motion.aside animate={{ width: mainSummon ? 0 : 340, opacity: mainSummon ? 0 : 1, x: mainSummon ? -60 : 0 }} transition={{ type: 'spring', stiffness: 90, damping: 20 }} className="shrink-0 flex flex-col border-r border-white/5 bg-black/20 backdrop-blur-sm overflow-hidden"><div className="w-[340px] h-full flex flex-col">
+                    <motion.aside animate={{ width: summonLayout ? 0 : 340, opacity: summonLayout ? 0 : 1, x: summonLayout ? -60 : 0 }} transition={{ type: 'spring', stiffness: 90, damping: 20 }} className="shrink-0 flex flex-col border-r border-white/5 bg-black/20 backdrop-blur-sm overflow-hidden"><div className="w-[340px] h-full flex flex-col">
                         <div className="px-4 py-3 text-[10px] tracking-[0.3em] text-slate-500 border-b border-white/5">CONVERSATION</div>
                         <div className="flex-1 overflow-y-auto custom-scrollbar px-4 py-3 space-y-3">
                             {messages.length === 0 && (
@@ -381,17 +389,19 @@ function App() {
                     {/* ---------- centre: the orb ---------- */}
                     <main className="flex-1 min-w-0 relative flex flex-col items-center">
                         <ScreenFrame state={orbState} />
-                        <motion.div className="flex-1 w-full relative" animate={{ x: mainSummon ? -window.innerWidth * 0.28 : 0 }} transition={{ type: 'spring', stiffness: 60, damping: 16 }}>
+                        <motion.div className="flex-1 w-full relative" animate={{ x: summonLayout ? -window.innerWidth * 0.28 : 0 }} transition={{ type: 'spring', stiffness: 60, damping: 16 }}>
                             <motion.div className="absolute inset-0 flex items-center justify-center pointer-events-none"
-                                animate={{ x: mouse.x * 26, y: mouse.y * 18, scale: mainSummon ? 0.72 : 1 }} transition={{ type: 'spring', stiffness: 50, damping: 18 }}>
+                                animate={{ x: mouse.x * 26, y: mouse.y * 18, scale: summonLayout ? 0.72 : 1 }} transition={{ type: 'spring', stiffness: 50, damping: 18 }}>
                                 <OrbHud state={orbState} size={Math.round(window.innerHeight * 0.74)} />
                             </motion.div>
-                            <motion.div className="absolute inset-0" animate={{ x: mouse.x * -10, y: mouse.y * -8 }} transition={{ type: 'spring', stiffness: 50, damping: 18 }}>
-                                <Orb3D state={orbState} level={orbLevel} compact={mainSummon} className="absolute inset-0 orb-fx" />
+                            <motion.div className="absolute inset-0 overflow-hidden pointer-events-none" animate={{ x: mouse.x * -10, y: mouse.y * -8 }} transition={{ type: 'spring', stiffness: 50, damping: 18 }}>
+                                {/* fixed-size canvas, centred: it never resizes while the sidebars animate, so the orb glides instead of snapping */}
+                                <Orb3D state={orbState} level={orbLevel} compact={summonLayout} className="absolute top-0 bottom-0 left-1/2 -translate-x-1/2 orb-fx"
+                                    style={{ width: Math.round(window.innerHeight * 1.6) }} />
                             </motion.div>
                             <AnimatePresence><FocusHUD focus={focus} onControl={focusControl} /></AnimatePresence>
                         </motion.div>
-                        <motion.div className="shrink-0 text-center -mt-6 mb-3 px-6 z-10" animate={{ x: mainSummon ? -window.innerWidth * 0.28 : 0, opacity: mainSummon ? 0.85 : 1 }} transition={{ type: 'spring', stiffness: 60, damping: 16 }}>
+                        <motion.div className="shrink-0 text-center -mt-6 mb-3 px-6 z-10" animate={{ x: summonLayout ? -window.innerWidth * 0.28 : 0, opacity: summonLayout ? 0.85 : 1 }} transition={{ type: 'spring', stiffness: 60, damping: 16 }}>
                             <div className={`text-xs tracking-[0.5em] ${orbState === 'offline' ? 'text-rose-300' : orbState === 'alert' ? 'text-amber-300' : 'text-cyan-200'}`}>{STATE_TEXT[orbState]}</div>
                             <div className="h-10 mt-2 text-sm text-slate-300 font-sans max-w-[640px] mx-auto line-clamp-2">
                                 {!socketConnected ? 'Start the Python backend (backend/server.py) to bring A.P.A online.' : caption}
@@ -415,7 +425,7 @@ function App() {
                     </main>
 
                     {/* ---------- right: activity ---------- */}
-                    <motion.aside animate={{ width: mainSummon ? 0 : 320, opacity: mainSummon ? 0 : 1, x: mainSummon ? 60 : 0 }} transition={{ type: 'spring', stiffness: 90, damping: 20 }} className="shrink-0 flex flex-col border-l border-white/5 bg-black/20 backdrop-blur-sm overflow-hidden"><div className="w-[320px] h-full flex flex-col">
+                    <motion.aside animate={{ width: summonLayout ? 0 : 320, opacity: summonLayout ? 0 : 1, x: summonLayout ? 60 : 0 }} transition={{ type: 'spring', stiffness: 90, damping: 20 }} className="shrink-0 flex flex-col border-l border-white/5 bg-black/20 backdrop-blur-sm overflow-hidden"><div className="w-[320px] h-full flex flex-col">
                         <div className="flex border-b border-white/5">
                             {[['log', 'MISSION LOG', Activity], ['focus', 'FOCUS', Target]].map(([k, l, I]) => (
                                 <button key={k} onClick={() => setRightTab(k)}
