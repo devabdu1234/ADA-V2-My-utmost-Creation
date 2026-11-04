@@ -221,13 +221,20 @@ class AudioLoop:
             count = pya.get_device_count()
             best_match = None
 
+            # Windows lists one mic once per host API (MME, DirectSound, WASAPI, WDM-KS).
+            # WASAPI/WDM-KS copies often reject 16 kHz, so take the first copy that accepts it.
             for i in range(count):
                 dev_info = pya.get_device_info_by_index(i)
                 dev_name = dev_info.get('name', '')
-                if dev_info.get('maxInputChannels', 0) > 0:
-                    if self.input_device_name.lower() in dev_name.lower():
-                        best_match = i
-                        print(f"[ADA] Found matching device: Index {i} -> {dev_name}")
+                if dev_info.get('maxInputChannels', 0) > 0 and self.input_device_name.lower() in dev_name.lower():
+                    try:
+                        pya.is_format_supported(SEND_SAMPLE_RATE, input_device=i, input_channels=CHANNELS, input_format=FORMAT)
+                    except ValueError:
+                        print(f"[ADA] Skipping device {i} -> {dev_name}: no {SEND_SAMPLE_RATE} Hz support")
+                        continue
+                    best_match = i
+                    print(f"[ADA] Found matching device: Index {i} -> {dev_name}")
+                    break
 
             if best_match is not None:
                 resolved_input_device_index = best_match
@@ -251,6 +258,8 @@ class AudioLoop:
             )
         except Exception as e:
             print(f"[ADA] Failed to open input stream: {e}")
+            if self.on_error:
+                self.on_error(f"Microphone could not start ({e}). Pick another mic in Settings, then press Voice off/on.")
             return
 
         print("[ADA] Input stream opened successfully.")
