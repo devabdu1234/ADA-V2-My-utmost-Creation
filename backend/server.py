@@ -110,8 +110,10 @@ def public_settings():
 def email_credentials():
     """settings.json first, then .env (same rule for voice, proactive and inbox panel)."""
     cfg = SETTINGS.get("email_config", {})
-    return (cfg.get("email_address", "") or os.getenv("EMAIL_ADDRESS", ""),
-            cfg.get("password", "") or os.getenv("EMAIL_PASSWORD", ""))
+    address = (cfg.get("email_address", "") or os.getenv("EMAIL_ADDRESS", "")).strip()
+    # Google shows app passwords as "abcd efgh ijkl mnop"; the spaces are not part of it.
+    password = "".join((cfg.get("password", "") or os.getenv("EMAIL_PASSWORD", "")).split())
+    return address, password
 
 
 # ---------------------------------------------------------------- focus ----
@@ -646,14 +648,40 @@ async def update_settings(sid, data):
             elif k == "email_config" and isinstance(v, dict):
                 v = dict(v)
                 v.pop("password_saved", None)
-                if not v.get("password"):          # blank = keep the saved password
+                v["password"] = "".join(str(v.get("password") or "").split())
+                if not v["password"]:              # blank = keep the saved password
                     v["password"] = SETTINGS.get("email_config", {}).get("password", "")
+                elif len(v["password"]) != 16:
+                    print(f"[SERVER] Warning: Gmail app passwords have 16 letters; this one has {len(v['password'])}.")
                 SETTINGS["email_config"] = {**SETTINGS.get("email_config", {}), **v}
             else:
                 SETTINGS[k] = v
         save_settings()
         print("Settings updated.")
         await sio.emit('settings_updated', {'settings': public_settings()})
+        if "email_config" in data:
+            await apply_email_settings()
+
+
+async def apply_email_settings():
+    """Push saved email settings into the running voice agent and reconnect.
+    Without this, a voice session started before the save keeps the old password."""
+    agent = audio_loop.email_agent if audio_loop else None
+    if not agent:
+        return
+    cfg = SETTINGS.get("email_config", {})
+    agent.email_address, agent.password = email_credentials()
+    agent.imap_server = cfg.get("imap_server", "imap.gmail.com")
+    agent.smtp_server = cfg.get("smtp_server", "smtp.gmail.com")
+    agent.connected = False
+    result = await asyncio.to_thread(agent.connect)
+    if "error" in result:
+        print(f"[SERVER] Email login failed with the new settings: {result['error']}")
+        await sio.emit('widget_update', {'type': 'error', 'data': {
+            'title': 'Email login failed', 'message': result['error'],
+            'detail': 'Check the 16-letter app password and that IMAP is on in Gmail.'}})
+    else:
+        print("[SERVER] Email connected with the new settings.")
 
 @sio.event
 async def get_settings(sid, data=None):
