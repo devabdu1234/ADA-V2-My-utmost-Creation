@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { Mail, AlertTriangle, Loader, Send } from 'lucide-react';
+import { Mail, AlertTriangle, Loader, Send, Image as ImageIcon } from 'lucide-react';
 
 const priorityColors = { High: 'text-rose-300', Medium: 'text-amber-300', Low: 'text-slate-400' };
 const sentimentColors = { Positive: 'text-emerald-300', Negative: 'text-rose-300', Neutral: 'text-slate-300' };
@@ -113,6 +113,12 @@ const EmailWindow = ({ socket, onClose, onCompose }) => {
                                             Low Confidence
                                         </span>
                                     )}
+                                    {email.image_count > 0 && (
+                                        <span className="text-[9px] px-1.5 py-0.5 rounded-full bg-fuchsia-500/10 text-fuchsia-200 border border-fuchsia-400/20 inline-flex items-center gap-1"
+                                            title="A.P.A. looked at these images">
+                                            <ImageIcon size={9} /> {email.image_count}
+                                        </span>
+                                    )}
                                 </div>
 
                                 <AnimatePresence>
@@ -133,6 +139,15 @@ const EmailWindow = ({ socket, onClose, onCompose }) => {
                                             <div className="text-[11px] text-slate-300 font-mono leading-relaxed border-t border-white/5 pt-2">
                                                 {email.summary || email.body_preview}
                                             </div>
+                                            {email.image_thumbs?.length > 0 && (
+                                                <div className="flex gap-2 overflow-x-auto pb-1">
+                                                    {email.image_thumbs.map((src, k) => (
+                                                        <img key={k} src={src} alt={email.image_names?.[k] || 'Email image'}
+                                                            title={email.image_names?.[k] || 'Email image'}
+                                                            className="h-20 rounded-lg border border-white/10 object-cover shrink-0" />
+                                                    ))}
+                                                </div>
+                                            )}
                                             {email.draft_reply && (
                                                 <div className="bg-cyan-500/5 border border-cyan-500/20 rounded-xl p-3">
                                                     <div className="text-[9px] text-cyan-400/60 uppercase tracking-wider mb-1">Draft Reply</div>

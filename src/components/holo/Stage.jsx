@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { MapPin, CloudSun, Mail, MonitorSmartphone, ShieldAlert, AlertTriangle, XOctagon, Check, X, Reply, Inbox, Crosshair, Plane, Activity, Satellite, Eye, Play } from 'lucide-react';
+import { MapPin, CloudSun, Mail, MonitorSmartphone, ShieldAlert, AlertTriangle, XOctagon, Check, X, Reply, Inbox, Crosshair, Plane, Activity, Satellite, Eye, Play, MailOpen, Image as ImageIcon } from 'lucide-react';
 import RadarMap from './RadarMap';
 import { FlyRow, Beams, BeamProvider } from './Fly';
 import GlobeStage from '../GlobeStage';
@@ -189,6 +189,7 @@ function EmailSummon({ widget, onClose, onOpenInbox, onAsk }) {
                             <div className="flex-1 px-3 py-2 min-w-0">
                                 <div className="flex items-center gap-2">
                                     <span className="text-sm text-white truncate flex-1">{e.subject}</span>
+                                    {e.image_count > 0 && <span className="text-[9px] text-fuchsia-200/80 inline-flex items-center gap-0.5"><ImageIcon size={10} />{e.image_count}</span>}
                                     {e.is_escalated && <span className="text-[9px] font-bold tracking-widest text-rose-300 border border-rose-400/40 px-1.5 rounded">ESCALATE</span>}
                                     <span className={`text-[9px] tracking-widest ${acc.text}`}>{(e.priority || '').toUpperCase()}</span>
                                 </div>
@@ -196,6 +197,11 @@ function EmailSummon({ widget, onClose, onOpenInbox, onAsk }) {
                                 {open === i && (
                                     <div className="mt-2 text-xs text-slate-300 space-y-2">
                                         <p>{e.summary}</p>
+                                        {e.image_thumbs?.length > 0 && (
+                                            <div className="flex gap-2">
+                                                {e.image_thumbs.map((src, k) => <img key={k} src={src} alt="Email image" className="h-16 rounded border border-white/10 object-cover" />)}
+                                            </div>
+                                        )}
                                         {e.draft_reply && <p className="text-slate-400 italic border-l-2 border-fuchsia-400/40 pl-2">{e.draft_reply}</p>}
                                         <div className="flex items-center gap-2 text-[10px] text-slate-500 font-mono">
                                             CONFIDENCE
@@ -214,6 +220,41 @@ function EmailSummon({ widget, onClose, onOpenInbox, onAsk }) {
                 <button onClick={() => onAsk('Read me the escalated and high priority emails, and suggest replies.')} className="holo-btn"><Reply size={14} /> Brief me</button>
             </div>
         </HoloPanel>
+        </FlyRow>
+    );
+}
+
+/* ------------------------------------------------------- EMAIL VIEW ---- */
+// One email opened by voice ("show me the invoice email"): full text plus its images.
+function EmailViewSummon({ widget, onClose, onAsk }) {
+    const d = widget.data || {};
+    const imgs = d.images_view || [];
+    const sender = String(d.from || 'Unknown sender');
+    return (
+        <FlyRow>
+            <HoloPanel code="MAIL-OPEN" accent="fuchsia" icon={MailOpen} title={d.subject || '(no subject)'}
+                subtitle={`${sender}${d.date ? ` · ${d.date}` : ''}`} onClose={onClose} className="w-[min(560px,34vw)]" bodyClass="p-0">
+                <div className="max-h-[52vh] overflow-y-auto custom-scrollbar px-5 py-4 text-[13px] leading-relaxed text-slate-200 whitespace-pre-wrap break-words font-sans">
+                    {d.body?.trim() || 'This email has no text.'}
+                </div>
+                <div className="flex gap-2 px-5 py-3 border-t border-white/5">
+                    <button onClick={() => onAsk(`Draft a reply to the email from ${sender} about "${d.subject || ''}".`)} className="holo-btn"><Reply size={14} /> Draft a reply</button>
+                    {imgs.length > 0 && <span className="text-[10px] text-slate-500 self-center font-mono">{imgs.length} IMAGE{imgs.length > 1 ? 'S' : ''} · SEEN BY A.P.A.</span>}
+                </div>
+            </HoloPanel>
+            {imgs.length > 0 && (
+                <HoloPanel code={`IMG-0${imgs.length}`} accent="violet" icon={ImageIcon} title={imgs.length > 1 ? `${imgs.length} attached images` : 'Attached image'}
+                    className="w-[min(380px,22vw)] self-center" bodyClass="p-3">
+                    <div className="max-h-[52vh] overflow-y-auto custom-scrollbar space-y-3">
+                        {imgs.map((src, k) => (
+                            <figure key={k}>
+                                <img src={src} alt={d.image_names?.[k] || 'Email image'} className="w-full rounded-md border border-white/10" />
+                                <figcaption className="text-[10px] text-slate-500 font-mono mt-1 truncate">{d.image_names?.[k] || 'inline image'}</figcaption>
+                            </figure>
+                        ))}
+                    </div>
+                </HoloPanel>
+            )}
         </FlyRow>
     );
 }
@@ -286,9 +327,9 @@ export function ConfirmCard({ request, onResolve }) {
 }
 
 /* ----------------------------------------------------------- STAGE ---- */
-const MAIN_TYPES = ['weather', 'map', 'email_summary', 'computer', 'gods_eye'];
+const MAIN_TYPES = ['weather', 'map', 'email_summary', 'email_view', 'computer', 'gods_eye'];
 
-const BEAM_COLOR = { weather: '#22d3ee', map: '#22d3ee', gods_eye: '#fbbf24', email_summary: '#f0abfc', computer: '#fbbf24' };
+const BEAM_COLOR = { weather: '#22d3ee', map: '#22d3ee', gods_eye: '#fbbf24', email_summary: '#f0abfc', email_view: '#f0abfc', computer: '#fbbf24' };
 
 export default function Stage({ widgets, computer, onDismiss, onOpenInbox, onAsk, onStop, onResume }) {
     const mains = widgets.filter((w) => MAIN_TYPES.includes(w.type));
@@ -322,6 +363,7 @@ export default function Stage({ widgets, computer, onDismiss, onOpenInbox, onAsk
                           <div className="pointer-events-auto">
                           <BeamProvider value={report}>
                             {(main.type === 'weather' || main.type === 'map') && <GeoSummon widget={main} onClose={() => onDismiss(main.id)} />}
+                            {main.type === 'email_view' && <EmailViewSummon widget={main} onClose={() => onDismiss(main.id)} onAsk={onAsk} />}
                             {main.type === 'email_summary' && <EmailSummon widget={main} onClose={() => onDismiss(main.id)} onOpenInbox={onOpenInbox} onAsk={onAsk} />}
                             {main.type === 'computer' && <ComputerSummon steps={computer.steps} shot={computer.shot} onClose={() => onDismiss(main.id)} onStop={onStop} onResume={onResume} />}
                             {main.type === 'gods_eye' && <GodsEyeSummon widget={main} onClose={() => onDismiss(main.id)} />}
