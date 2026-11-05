@@ -1,10 +1,17 @@
 import React, { useState, useEffect } from 'react';
 import { X, Mail, CheckCircle, Loader } from 'lucide-react';
 
+// ON = A.P.A must ask you before running the tool (backend default is ON).
 const TOOLS = [
-    { id: 'read_emails', label: 'Read Emails' },
-    { id: 'send_email', label: 'Send Email' },
+    { id: 'read_emails', label: 'Read emails' },
+    { id: 'send_email', label: 'Send email' },
+    { id: 'computer_click_text', label: 'Click on screen text' },
+    { id: 'computer_mouse_click', label: 'Mouse click' },
+    { id: 'computer_type', label: 'Type text' },
+    { id: 'computer_key', label: 'Press keys' },
+    { id: 'computer_hotkey', label: 'Keyboard shortcuts' },
 ];
+const asks = (perms, id) => perms[id] !== false;
 
 const SettingsWindow = ({
     socket,
@@ -53,7 +60,7 @@ const SettingsWindow = ({
     }, [socket]);
 
     const togglePermission = (toolId) => {
-        const newVal = !permissions[toolId];
+        const newVal = !asks(permissions, toolId);
         setPermissions(prev => ({ ...prev, [toolId]: newVal }));
         if (socket) {
             socket.emit('update_settings', {
@@ -83,16 +90,16 @@ const SettingsWindow = ({
                 <div className="p-6 space-y-8">
                     {/* Tool Permissions */}
                     <div>
-                        <h3 className="text-xs font-bold tracking-widest text-cyan-400/80 mb-3">TOOL PERMISSIONS</h3>
+                        <h3 className="text-xs font-bold tracking-widest text-cyan-400/80 mb-3">ASK BEFORE RUNNING</h3>
                         <div className="space-y-2">
                             {TOOLS.map(tool => (
                                 <div key={tool.id} className="flex items-center justify-between px-4 py-2.5 rounded-xl bg-white/5 border border-white/10">
                                     <span className="text-xs text-slate-300">{tool.label}</span>
                                     <button
                                         onClick={() => togglePermission(tool.id)}
-                                        className={`relative w-10 h-5 rounded-full transition-colors duration-200 ${permissions[tool.id] ? 'bg-cyan-500/80' : 'bg-slate-600/50'}`}
+                                        className={`relative w-10 h-5 rounded-full transition-colors duration-200 ${asks(permissions, tool.id) ? 'bg-cyan-500/80' : 'bg-slate-600/50'}`}
                                     >
-                                        <div className={`absolute top-0.5 left-0.5 w-4 h-4 bg-white rounded-full shadow-md transition-transform duration-200 ${permissions[tool.id] ? 'translate-x-5' : 'translate-x-0'}`} />
+                                        <div className={`absolute top-0.5 left-0.5 w-4 h-4 bg-white rounded-full shadow-md transition-transform duration-200 ${asks(permissions, tool.id) ? 'translate-x-5' : 'translate-x-0'}`} />
                                     </button>
                                 </div>
                             ))}
@@ -123,7 +130,7 @@ const SettingsWindow = ({
                                     type="password"
                                     value={emailConfig.password}
                                     onChange={(e) => setEmailConfig({ ...emailConfig, password: e.target.value })}
-                                    placeholder="16-digit App Password"
+                                    placeholder={emailConfig.password_saved ? "Saved - leave blank to keep" : "16-digit App Password"}
                                     className="w-full bg-white/5 border border-white/10 rounded-xl p-3 text-xs text-slate-200 focus:border-pink-400 focus:ring-1 focus:ring-pink-400/50 outline-none transition-all backdrop-blur-sm"
                                 />
                                 <p className="text-[9px] text-slate-400 mt-1.5">Use Google Account &gt; Security &gt; App Passwords</p>

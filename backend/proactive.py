@@ -4,10 +4,12 @@ Turns A.P.A's email monitor into an attention-policy agent: every high-priority
 email is scored for interrupt-worthiness before the decision to speak is made,
 and every decision is persisted as research evidence (JSONL).
 
-Policy sketch (Horvitz 1999, cost-of-interruption):
-    score = urgency x confidence x relevance / (1 + social_cost)
+Scoring (additive heuristic, inspired by Horvitz 1999 cost-of-interruption):
+    score = urgency + w_conf * confidence + relevance + social - focus
+    (see compute_breakpoints for each term; max possible score is 10.0)
 
-Speak only when score >= threshold AND the mic is free AND no recent failure.
+Speak only when score >= threshold AND no gate fires: user absent, low urgency,
+cooldown, daily cap, user focusing (focus session), user speaking, ADA speaking.
 Values live in POLICY; tune margins there, not in call sites.
 """
 
@@ -156,7 +158,8 @@ class ProactiveEngine:
         """Score a batch of analyzed emails; return the winning interrupt or None.
 
         A spoken interruption additionally requires: cooldown clear, daily cap
-        clear, mic not currently open with speech, and ADA not itself speaking.
+        clear, no active focus session, mic not currently open with speech, and
+        ADA not itself speaking.
         Widget surfacing is always allowed regardless.
         """
         self._rollover_day()
@@ -191,6 +194,8 @@ class ProactiveEngine:
             gate_reasons.append("cooldown")
         if self.daily_cap_reached():
             gate_reasons.append("daily_cap")
+        if time.time() < signals.busy_until:
+            gate_reasons.append("user_focusing")
         if signals.mic_open:
             gate_reasons.append("user_speaking")
         if signals.model_speaking:
