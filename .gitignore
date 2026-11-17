@@ -44,3 +44,8 @@ out/
 # OS
 .DS_Store
 Thumbs.db
+
+# Not part of APA / too large for the repo
+promo/*4K*.mp4
+Claude outputs/
+icst-lms-redesign/

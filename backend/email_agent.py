@@ -11,6 +11,7 @@ from html import unescape
 from html.parser import HTMLParser
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
+from email.utils import parseaddr, make_msgid
 from datetime import datetime, timedelta
 from dotenv import load_dotenv
 from google import genai
@@ -150,6 +151,30 @@ class EmailAgent:
             if "error" in conn:
                 return conn
         return None
+
+    @staticmethod
+    def _clean_header(value):
+        """Header values may not contain line breaks (header-injection guard)."""
+        return " ".join(str(value or "").split())
+
+    def _thread_headers(self, msg):
+        """IDs needed to answer this email inside the same conversation thread."""
+        return {"message_id": self._clean_header(msg.get("Message-ID")),
+                "references": self._clean_header(msg.get("References")),
+                "reply_to": self._clean_header(msg.get("Reply-To"))}
+
+    async def reply_to(self, original, body, cc=None):
+        """Reply to an email so it threads under it: Re: subject, In-Reply-To and References headers,
+        sent to the Reply-To address (or the sender)."""
+        to = parseaddr(original.get("reply_to") or original.get("from") or "")[1]
+        if not to:
+            return {"error": "Could not find the sender's address to reply to."}
+        subject = self._clean_header(original.get("subject")) or "(no subject)"
+        if not subject.lower().startswith("re:"):
+            subject = f"Re: {subject}"
+        msg_id = self._clean_header(original.get("message_id"))
+        refs = " ".join(x for x in (self._clean_header(original.get("references")), msg_id) if x)
+        return await self.send_email(to, subject, body, cc=cc, in_reply_to=msg_id or None, references=refs or None)
 
     @staticmethod
     def _decode_part(part):
@@ -341,6 +366,7 @@ class EmailAgent:
                     parsed = email.message_from_bytes(msg_data[0][1])
                     images = self._get_images(parsed)
                     emails.append({
+                        **self._thread_headers(parsed),
                         "_images": [im["data"] for im in images],  # for Gemini only; removed before returning
                         "image_count": len(images),
                         "image_thumbs": [im["thumb"] for im in images],
@@ -405,6 +431,7 @@ class EmailAgent:
             return {"error": f"No email matched '{query}'. Most recent: " + "; ".join(recent) if recent else "The inbox is empty."}
         images = self._get_images(best, view=True)
         return {
+            **self._thread_headers(best),
             "from": best.get("From"), "to": best.get("To"), "subject": best.get("Subject"), "date": best.get("Date"),
             "body": self._get_body(best)[:6000],
             "image_count": len(images),
@@ -491,13 +518,9 @@ class EmailAgent:
             analyses = await self._batch_analyze_emails([original])
             body = analyses[0].get("draft_reply", "") if analyses else ""
 
-        subject = original["subject"]
-        if not subject.lower().startswith("re:"):
-            subject = f"Re: {subject}"
+        return await self.reply_to(original, body)
 
-        return await self.send_email(original["from"], subject, body)
-
-    async def send_email(self, to, subject, body, priority="normal", cc=None):
+    async def send_email(self, to, subject, body, priority="normal", cc=None, in_reply_to=None, references=None):
         conn_err = self._ensure_connected()
         if conn_err:
             return conn_err
@@ -505,10 +528,16 @@ class EmailAgent:
         to = to.replace('\r', '').replace('\n', ' ').strip() if to else to
         subject = subject.replace('\r', '').replace('\n', ' ').strip() if subject else subject
         cc = cc.replace('\r', '').replace('\n', ' ').strip() if cc else None
+        in_reply_to = self._clean_header(in_reply_to) or None
+        references = self._clean_header(references) or None
         def _do_send():
             msg = MIMEMultipart()
             msg["From"] = self.email_address
             msg["To"] = to
+            msg["Message-ID"] = make_msgid(domain=(self.email_address or "apa.local").split("@")[-1])
+            if in_reply_to:  # thread the reply under the original email
+                msg["In-Reply-To"] = in_reply_to
+                msg["References"] = references or in_reply_to
             if priority.lower() == "high" and "[URGENT]" not in subject.upper():
                 msg["Subject"] = f"[URGENT] {subject}"
                 msg["X-Priority"] = "1 (Highest)"

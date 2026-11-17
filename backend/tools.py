@@ -20,6 +20,20 @@ show_email_tool = {
         "required": ["query"]}
 }
 
+reply_to_email_tool = {
+    "name": "reply_to_email",
+    "description": "Replies to an email so the reply stays in the same conversation thread (sets the In-Reply-To and References "
+                   "headers and replies to the original sender). Use this instead of send_email whenever the user is answering "
+                   "an email. By default it replies to the email currently open on screen (from show_email). Read the draft to "
+                   "the user before sending.",
+    "parameters": {"type": "OBJECT", "properties": {
+        "body": {"type": "STRING", "description": "The reply text."},
+        "query": {"type": "STRING", "description": "Optional: which email to reply to (sender or subject words, or 'latest'). "
+                                                   "Leave empty to reply to the email currently open on screen."},
+        "cc": {"type": "STRING", "description": "Optional comma-separated CC addresses."}},
+        "required": ["body"]}
+}
+
 send_email_tool = {    "name": "send_email",
     "description": "Sends an email with optional priority flag.",
     "parameters": {
@@ -224,6 +238,7 @@ tools_list = [{
     "function_declarations": [
         read_emails_tool,
         show_email_tool,
+        reply_to_email_tool,
         send_email_tool,
         get_weather_tool,
         computer_list_windows_tool,

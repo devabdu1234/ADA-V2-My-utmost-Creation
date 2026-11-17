@@ -238,7 +238,7 @@ function EmailViewSummon({ widget, onClose, onAsk }) {
                     {d.body?.trim() || 'This email has no text.'}
                 </div>
                 <div className="flex gap-2 px-5 py-3 border-t border-white/5">
-                    <button onClick={() => onAsk(`Draft a reply to the email from ${sender} about "${d.subject || ''}".`)} className="holo-btn"><Reply size={14} /> Draft a reply</button>
+                    <button onClick={() => onAsk(`Draft a reply to the email from ${sender} about "${d.subject || ''}" and read it to me. When I agree, send it with reply_to_email so it stays in the same thread.`)} className="holo-btn"><Reply size={14} /> Draft a reply</button>
                     {imgs.length > 0 && <span className="text-[10px] text-slate-500 self-center font-mono">{imgs.length} IMAGE{imgs.length > 1 ? 'S' : ''} · SEEN BY A.P.A.</span>}
                 </div>
             </HoloPanel>

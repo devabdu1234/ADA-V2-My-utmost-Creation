@@ -1,0 +1,118 @@
+[Tue 11/10/2026 13:47:47.92] START 
+C:\Users\ADMIN\AppData\Local\Programs\Python\Python312\python.exe
+Python 3.12.10
+C:\Program Files\nodejs\npm
+C:\Program Files\nodejs\npm.cmd
+
+[notice] A new release of pip is available: 26.2.2 -> 26.3
+[notice] To update, run: python.exe -m pip install --upgrade pip
+[pip exit 0] 
+
+> apa-v2@1.0.0 dev
+> concurrently -k "vite" "wait-on tcp:5173 && npx electron ."
+
+(node:12780) [DEP0060] DeprecationWarning: The `util._extend` API is deprecated. Please use Object.assign() instead.
+(Use `node --trace-deprecation ...` to show where the warning was created)
+[0] [33mThe CJS build of Vite's Node API is deprecated. See https://vite.dev/guide/troubleshooting.html#vite-cjs-node-api-deprecated for more details.[39m
+[0] 
+[0]   [32m[1mVITE[22m v5.4.21[39m  [2mready in [0m[1m1987[22m[2m[0m ms[22m
+[0] 
+[0]   [32m➜[39m  [1mLocal[22m:   [36mhttp://localhost:[1m5173[22m/[39m
+[0] [2m  [32m➜[39m  [1mNetwork[22m[2m: use [22m[1m--host[22m[2m to expose[22m
+[1] 
+[1] Starting Python backend: C:\Users\ADMIN\OneDrive\Desktop\assingment\ADA-V2-My-utmost-Creation\backend\server.py
+[1] Waiting for backend...
+[1] Waiting for backend...
+[1] Waiting for backend...
+[1] [Python]: [SERVER] GEMINI_API_KEY FOUND
+[1] 
+[1] Waiting for backend...
+[1] Waiting for backend...
+[1] [Python]: Loaded settings.
+[1] 
+[1] [Python Error]: C:\Users\ADMIN\OneDrive\Desktop\assingment\ADA-V2-My-utmost-Creation\backend\server.py:196: DeprecationWarning: 
+[1]         on_event is deprecated, use lifespan event handlers instead.
+[1] 
+[1]         Read more about it in the
+[1]         [FastAPI docs for Lifespan Events](https://fastapi.tiangolo.com/advanced/events/).
+[1]         
+[1]   @app.on_event("startup")
+[1] 
+[1] [Python]: [SERVER] GEMINI_API_KEY FOUND
+[1] 
+[1] [Python]: Loaded settings.
+[1] 
+[1] [Python Error]: INFO:     Started server process [4576]
+[1] INFO:     Waiting for application startup.
+[1] 
+[1] [Python]: [SERVER] A.P.A Email Assistant Backend Starting...
+[1] 
+[1] [Python Error]: INFO:     Application startup complete.
+[1] 
+[1] [Python Error]: INFO:     Uvicorn running on http://127.0.0.1:8000 (Press CTRL+C to quit)
+[1] 
+[1] [Python]: INFO:     127.0.0.1:51894 - "GET /status HTTP/1.1" 200 OK
+[1] 
+[1] Backend is ready!
+[0] Browserslist: browsers data (caniuse-lite) is 6 months old. Please run:
+[0]   npx update-browserslist-db@latest
+[0]   Why you should do it regularly: https://github.com/browserslist/update-db#readme
+[1] [Python]: INFO:     127.0.0.1:63226 - "GET /socket.io/?EIO=4&transport=polling&t=f4chky64 HTTP/1.1" 200 OK
+[1] 
+[1] Frontend loaded successfully!
+[1] [Python]: Client connected: P-kHvZo3OVNNWeVWAAAB
+[1] 
+[1] [Python]: INFO:     127.0.0.1:63226 - "POST /socket.io/?EIO=4&transport=polling&t=f4d0zptm&sid=QRnsfRoxlPEuBHpoAAAA HTTP/1.1" 200 OK
+[1] 
+[1] [Python]: INFO:     127.0.0.1:63226 - "GET /socket.io/?EIO=4&transport=polling&t=f4d14wgl&sid=QRnsfRoxlPEuBHpoAAAA HTTP/1.1" 200 OK
+[1] 
+[1] [Python]: INFO:     127.0.0.1:63227 - "POST /socket.io/?EIO=4&transport=polling&t=f4d4npdu&sid=QRnsfRoxlPEuBHpoAAAA HTTP/1.1" 200 OK
+[1] 
+[1] [Python]: INFO:     127.0.0.1:63226 - "GET /socket.io/?EIO=4&transport=polling&t=f4d4hh66&sid=QRnsfRoxlPEuBHpoAAAA HTTP/1.1" 200 OK
+[1] 
+[1] [Python Error]: INFO:     127.0.0.1:63230 - "WebSocket /socket.io/?EIO=4&transport=websocket&sid=QRnsfRoxlPEuBHpoAAAA" [accepted]
+[1] 
+[1] [Python Error]: INFO:     connection open
+[1] 
+[1] [Python]: INFO:     127.0.0.1:63226 - "POST /socket.io/?EIO=4&transport=polling&t=f4dbgbcv&sid=QRnsfRoxlPEuBHpoAAAA HTTP/1.1" 200 OK
+[1] 
+[1] [Python]: INFO:     127.0.0.1:63226 - "GET /socket.io/?EIO=4&transport=polling&t=f4dbp9u7&sid=QRnsfRoxlPEuBHpoAAAA HTTP/1.1" 200 OK
+[1] 
+[1] [Python]: INFO:     127.0.0.1:63226 - "GET /socket.io/?EIO=4&transport=polling&t=f4do2d07&sid=QRnsfRoxlPEuBHpoAAAA HTTP/1.1" 200 OK
+[1] 
+[1] [Python]: Starting Audio Loop...
+[1] Using input device: Name='Default - Microphone Array (Intel® Smart Sound Technology for Digital Microphones)', Index=0
+[1] Initializing AudioLoop with device_index=0
+[1] 
+[1] [Python]: AudioLoop initialized successfully.
+[1] [ADA DEBUG] [CONFIG] Updating tool permissions: {'read_emails': True, 'send_email': True}
+[1] Creating asyncio task for AudioLoop.run()
+[1] Emitting 'A.P.A Started'
+[1] 
+[1] [Python]: [ADA DEBUG] [CONNECT] Connecting to Gemini Live API...
+[1] 
+[1] [Python]: [SERVER] Loading email configuration...
+[1] 
+[1] [Python]: [ADA DEBUG] [INFO] Auto-sending startup greeting cue
+[1] 
+[1] [Python]: [ADA] Email agent connected on startup for subconscious monitoring.
+[1] [ADA] Attempting to find input device matching: 'Microphone Array (Intel® Smart Sound Technology for Digital Microphones)'
+[1] [ADA] Could not find device with name 'Microphone Array (Intel® Smart Sound Technology for Digital Microphones)'. Using default.
+[1] [ADA] Using input device: Index None -> Microphone Array (IntelÂ® Smart 
+[1] 
+[1] [Python]: [ADA] Subconscious Monitor started — watching inbox.
+[1] 
+[1] [Python Error]: Warning: there are non-data parts in the response: ['text', 'thought'], returning concatenated data result from data parts, check out the non data parts for full response from model.
+[1] 
+[1] [Python]: [ADA] Input stream opened successfully.
+[1] 
+[1] App closing... Killing Python backend.
+[1] wait-on tcp:5173 && npx electron . exited with code 0
+--> Sending SIGTERM to other processes..
+[0] vite exited with code 1
+npm notice
+npm notice New major version of npm available! 11.19.1 -> 12.2.2
+npm notice Changelog: https://github.com/npm/cli/releases/tag/v12.2.2
+npm notice To update run: npm install -g npm@12.2.2
+npm notice
+[Tue 11/10/2026 13:48:50.74] EXIT 1 

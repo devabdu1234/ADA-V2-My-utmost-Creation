@@ -29,6 +29,7 @@ try {
 const TOOL_META = {
     read_emails: { label: 'Scanning inbox', icon: Mail },
     show_email: { label: 'Opening email', icon: Mail },
+    reply_to_email: { label: 'Replying in thread', icon: Send },
     send_email: { label: 'Sending email', icon: Send },
     get_weather: { label: 'Weather lock', icon: CloudSun },
     show_map: { label: 'Map lock', icon: MapPin },
